@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>SGAO Image Center</title>
+		<link rel="stylesheet" href="/admin/app.css" />
+	</head>
+
+	<body>
+		<main class="page">
+			<header class="page-header">
+				<div>
+					<p class="eyebrow">SGAO</p>
+					<h1>Image Center</h1>
+					<p class="subtitle">上传图片到 Cloudflare R2，并生成 img.sgao.cc 地址。</p>
+				</div>
+			</header>
+
+			<section class="panel">
+				<div class="field">
+					<label for="token">上传密钥</label>
+					<input id="token" type="password" placeholder="请输入 UPLOAD_TOKEN" autocomplete="off" />
+					<p class="help-text">密钥仅保存在当前浏览器标签页，关闭标签页后清除。</p>
+				</div>
+
+				<div class="field">
+					<label for="folder">保存目录</label>
+					<select id="folder">
+						<option value="common">common</option>
+						<option value="blog">blog</option>
+						<option value="docs">docs</option>
+						<option value="logo">logo</option>
+					</select>
+				</div>
+
+				<div id="dropZone" class="drop-zone" tabindex="0" role="button">
+					<div class="drop-icon">＋</div>
+					<strong>拖动图片到这里</strong>
+					<span>或点击选择图片，可一次选择多张</span>
+
+					<input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
+				</div>
+
+				<div id="fileList" class="file-list"></div>
+
+				<button id="uploadButton" class="primary-button">开始上传</button>
+
+				<div id="status" class="status"></div>
+			</section>
+		</main>
+
+		<script src="/admin/app.js"></script>
+	</body>
+</html>

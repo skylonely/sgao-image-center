@@ -14,10 +14,20 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
   "r2_buckets": [
     {
       "binding": "IMAGES",
       "bucket_name": "sgao-images"
     }
-  ]
+  ],
+  "secrets": {
+    "required": [
+      "UPLOAD_TOKEN"
+    ]
+  }
 }
