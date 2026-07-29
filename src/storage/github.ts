@@ -1,58 +1,62 @@
-const GITHUB_OWNER = "skylonely";
-const GITHUB_REPOSITORY = "sgao-images";
-const GITHUB_BRANCH = "main";
+const GITHUB_OWNER = 'skylonely';
+const GITHUB_REPOSITORY = 'sgao-images';
+const GITHUB_BRANCH = 'main';
 
-export async function getFileFromGitHub(path: string): Promise<Response> {
-  const normalizedPath = path
-    .split("/")
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
+export async function getImageFromGitHub(path: string): Promise<Response | null> {
+	const normalizedPath = path
+		.split('/')
+		.filter(Boolean)
+		.map((segment) => encodeURIComponent(segment))
+		.join('/');
 
-  if (!normalizedPath) {
-    return new Response("File path is required", {
-      status: 400,
-    });
-  }
+	if (!normalizedPath) {
+		return null;
+	}
 
-  const rawUrl =
-    `https://raw.githubusercontent.com/` +
-    `${GITHUB_OWNER}/${GITHUB_REPOSITORY}/${GITHUB_BRANCH}/${normalizedPath}`;
+	const rawUrl = `https://raw.githubusercontent.com/` + `${GITHUB_OWNER}/${GITHUB_REPOSITORY}/` + `${GITHUB_BRANCH}/${normalizedPath}`;
 
-  try {
-    const upstreamResponse = await fetch(rawUrl, {
-      headers: {
-        "User-Agent": "sgao-image-center",
-      },
-    });
+	console.log('GitHub request:', rawUrl);
 
-    if (upstreamResponse.status === 404) {
-      return new Response("Image not found", {
-        status: 404,
-      });
-    }
+	try {
+		const upstreamResponse = await fetch(rawUrl, {
+			headers: {
+				'User-Agent': 'sgao-image-center',
+			},
+		});
 
-    if (!upstreamResponse.ok) {
-      return new Response("Image storage request failed", {
-        status: 502,
-      });
-    }
+		if (upstreamResponse.status === 404) {
+			console.log('GITHUB MISS:', path);
+			return null;
+		}
 
-    const headers = new Headers(upstreamResponse.headers);
+		if (!upstreamResponse.ok) {
+			console.error('GitHub request failed:', upstreamResponse.status, upstreamResponse.statusText);
 
-    headers.set("Cache-Control", "public, max-age=300");
-    headers.set("X-Content-Type-Options", "nosniff");
-    headers.delete("set-cookie");
+			throw new Error(`GitHub request failed: ${upstreamResponse.status}`);
+		}
 
-    return new Response(upstreamResponse.body, {
-      status: 200,
-      headers,
-    });
-  } catch (error) {
-    console.error("GitHub request failed:", error);
+		console.log('GITHUB HIT:', path);
 
-    return new Response("Unable to connect to image storage", {
-      status: 502,
-    });
-  }
+		const headers = new Headers();
+
+		const contentType = upstreamResponse.headers.get('Content-Type');
+
+		if (contentType) {
+			headers.set('Content-Type', contentType);
+		} else {
+			headers.set('Content-Type', 'application/octet-stream');
+		}
+
+		headers.set('Cache-Control', 'public, max-age=604800');
+		headers.set('X-Content-Type-Options', 'nosniff');
+		headers.set('X-Image-Source', 'github');
+
+		return new Response(upstreamResponse.body, {
+			status: 200,
+			headers,
+		});
+	} catch (error) {
+		console.error('GitHub storage error:', error);
+		throw error;
+	}
 }
