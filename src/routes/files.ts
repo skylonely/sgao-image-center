@@ -94,6 +94,51 @@ function parseLimit(value: string | null): number {
 	return Math.min(Math.max(parsed, 1), MAX_PAGE_SIZE);
 }
 
+function directoriesFromKeys(keys: string[]): string[] {
+	const directories = new Set<string>();
+
+	for (const key of keys) {
+		const segments = key.split('/');
+
+		segments.pop();
+
+		for (let depth = 1; depth <= segments.length; depth += 1) {
+			const directory = segments.slice(0, depth).join('/');
+
+			if (directory) {
+				directories.add(directory);
+			}
+		}
+	}
+
+	return [...directories].sort((left, right) => left.localeCompare(right, 'en'));
+}
+
+async function listDirectories(request: Request, env: Env): Promise<Response> {
+	const url = new URL(request.url);
+	const cursor = url.searchParams.get('cursor') || undefined;
+
+	try {
+		const result = await env.IMAGES.list({
+			limit: 1000,
+			cursor,
+			include: [],
+		});
+
+		return jsonResponse({
+			success: true,
+			directories: directoriesFromKeys(result.objects.map((object) => object.key)),
+			scannedObjects: result.objects.length,
+			truncated: result.truncated,
+			cursor: result.truncated ? result.cursor : null,
+		});
+	} catch (error) {
+		console.error('Failed to list directories:', error);
+
+		return jsonResponse({ success: false, message: 'Failed to load directories' }, 500);
+	}
+}
+
 async function listFiles(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
 	const prefix = url.searchParams.get('prefix')?.replace(/^\/+/, '') ?? '';
@@ -343,8 +388,11 @@ export async function handleFiles(request: Request, env: Env): Promise<Response>
 	}
 
 		switch (request.method) {
-			case 'GET':
-				return listFiles(request, env);
+			case 'GET': {
+				const url = new URL(request.url);
+
+				return url.searchParams.get('view') === 'directories' ? listDirectories(request, env) : listFiles(request, env);
+			}
 
 			case 'DELETE': {
 				const url = new URL(request.url);

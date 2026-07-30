@@ -28,13 +28,9 @@
 				<div class="field">
 					<label for="folder">保存目录</label>
 					<input id="folder" type="text" list="folderSuggestions" value="common" placeholder="例如：common 或 docs/guides" autocomplete="off" />
-					<datalist id="folderSuggestions">
-						<option value="common"></option>
-						<option value="blog"></option>
-						<option value="docs"></option>
-						<option value="logo"></option>
-					</datalist>
-					<p class="help-text">可输入自定义目录；多级目录使用 “/”，例如 docs/guides。</p>
+					<datalist id="folderSuggestions"></datalist>
+					<p id="directoryStatus" class="help-text">输入上传密钥后，将自动读取 R2 中的实际目录。</p>
+					<p class="help-text">也可输入新目录；多级目录使用 “/”，例如 docs/guides。</p>
 				</div>
 
 				<div id="dropZone" class="drop-zone" tabindex="0" role="button">

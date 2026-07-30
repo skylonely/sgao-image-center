@@ -284,6 +284,21 @@ describe('image center worker', () => {
 			folder: 'conflict-tests/guides/intro',
 		});
 		expect(await env.IMAGES.head(result.key)).not.toBeNull();
+
+		const directoriesResponse = await SELF.fetch('https://example.com/api/files?view=directories', {
+			headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` },
+		});
+		const directories = await directoriesResponse.json<{ success: boolean; directories: string[] }>();
+
+		expect(directoriesResponse.status).toBe(200);
+		expect(directories.success).toBe(true);
+		expect(directories.directories).toEqual(
+			expect.arrayContaining([
+				'conflict-tests',
+				'conflict-tests/guides',
+				'conflict-tests/guides/intro',
+			]),
+		);
 	});
 
 	it('renames a file without changing its contents or overwriting another key', async () => {

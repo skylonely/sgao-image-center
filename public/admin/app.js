@@ -1,5 +1,7 @@
 const tokenInput = document.querySelector('#token');
 const folderInput = document.querySelector('#folder');
+const folderSuggestions = document.querySelector('#folderSuggestions');
+const directoryStatus = document.querySelector('#directoryStatus');
 const dropZone = document.querySelector('#dropZone');
 const fileInput = document.querySelector('#fileInput');
 const fileList = document.querySelector('#fileList');
@@ -15,6 +17,9 @@ const renameButton = document.querySelector('#renameButton');
 
 let selectedFiles = [];
 let conflictResolver = null;
+let directoryLoadTimer = null;
+let directoryRequestId = 0;
+let directorySuggestions = new Set();
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ALLOWED_FILE_TYPES = new Map([
@@ -31,11 +36,104 @@ folderInput.value = localStorage.getItem('sgaoUploadFolder') || 'common';
 
 tokenInput.addEventListener('input', () => {
 	sessionStorage.setItem('sgaoUploadToken', tokenInput.value.trim());
+	scheduleDirectoryLoad();
 });
 
 folderInput.addEventListener('input', () => {
 	localStorage.setItem('sgaoUploadFolder', folderInput.value.trim());
 });
+
+folderInput.addEventListener('focus', () => {
+	if (tokenInput.value.trim() && !directorySuggestions.size) {
+		loadDirectorySuggestions();
+	}
+});
+
+function renderDirectorySuggestions() {
+	folderSuggestions.replaceChildren();
+
+	for (const directory of [...directorySuggestions].sort((left, right) => left.localeCompare(right, 'en'))) {
+		const option = document.createElement('option');
+
+		option.value = directory;
+		folderSuggestions.append(option);
+	}
+}
+
+function addDirectorySuggestion(directory) {
+	const segments = directory.split('/').filter(Boolean);
+
+	for (let depth = 1; depth <= segments.length; depth += 1) {
+		directorySuggestions.add(segments.slice(0, depth).join('/'));
+	}
+
+	renderDirectorySuggestions();
+}
+
+function scheduleDirectoryLoad() {
+	window.clearTimeout(directoryLoadTimer);
+	directoryLoadTimer = window.setTimeout(loadDirectorySuggestions, 450);
+}
+
+async function loadDirectorySuggestions() {
+	const token = tokenInput.value.trim();
+	const requestId = ++directoryRequestId;
+
+	if (!token) {
+		directorySuggestions.clear();
+		renderDirectorySuggestions();
+		directoryStatus.textContent = '输入上传密钥后，将自动读取 R2 中的实际目录。';
+		return;
+	}
+
+	directoryStatus.textContent = '正在读取 R2 目录…';
+
+	try {
+		const discovered = new Set();
+		let cursor = null;
+
+		do {
+			const query = new URLSearchParams({ view: 'directories' });
+
+			if (cursor) {
+				query.set('cursor', cursor);
+			}
+
+			const response = await fetch(`/api/files?${query}`, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+				},
+			});
+			const result = await response.json();
+
+			if (!response.ok || !result.success) {
+				throw new Error(response.status === 401 ? '密钥验证失败，暂时无法读取 R2 目录。' : result.message || '目录读取失败。');
+			}
+
+			for (const directory of result.directories) {
+				discovered.add(directory);
+			}
+
+			cursor = result.truncated ? result.cursor : null;
+		} while (cursor && requestId === directoryRequestId);
+
+		if (requestId !== directoryRequestId) {
+			return;
+		}
+
+		directorySuggestions = discovered;
+		renderDirectorySuggestions();
+		directoryStatus.textContent = discovered.size ? `已从 R2 同步 ${discovered.size} 个实际目录。` : 'R2 中暂无目录，可直接输入新目录。';
+	} catch (error) {
+		if (requestId !== directoryRequestId) {
+			return;
+		}
+
+		directorySuggestions.clear();
+		renderDirectorySuggestions();
+		directoryStatus.textContent = error instanceof Error ? error.message : '目录读取失败。';
+	}
+}
 
 dropZone.addEventListener('click', () => {
 	fileInput.click();
@@ -399,6 +497,11 @@ uploadButton.addEventListener('click', async () => {
 
 	showResults(results, failures);
 
+	if (results.length) {
+		addDirectorySuggestion(folder);
+		directoryStatus.textContent = `已从 R2 同步 ${directorySuggestions.size} 个实际目录。`;
+	}
+
 	uploadButton.disabled = false;
 	uploadButton.textContent = '开始上传';
 
@@ -408,3 +511,7 @@ uploadButton.addEventListener('click', async () => {
 		renderFiles();
 	}
 });
+
+if (tokenInput.value.trim()) {
+	loadDirectorySuggestions();
+}
