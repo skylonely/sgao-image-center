@@ -2,7 +2,13 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_RENAME_ATTEMPTS = 100;
 const IMAGE_ORIGIN = 'https://img.sgao.cc';
 
-const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml', 'image/avif']);
+const ALLOWED_FILE_TYPES = new Map<string, ReadonlySet<string>>([
+	['image/jpeg', new Set(['jpg', 'jpeg'])],
+	['image/png', new Set(['png'])],
+	['image/webp', new Set(['webp'])],
+	['image/gif', new Set(['gif'])],
+	['image/svg+xml', new Set(['svg'])],
+]);
 const CONFLICT_POLICIES = new Set(['reject', 'rename', 'overwrite']);
 
 type ConflictPolicy = 'reject' | 'rename' | 'overwrite';
@@ -44,10 +50,56 @@ function normalizeFilename(filename: string): string | null {
 	return cleanName;
 }
 
+function filenameExtension(filename: string): string {
+	const extensionIndex = filename.lastIndexOf('.');
+
+	return extensionIndex > 0 ? filename.slice(extensionIndex + 1).toLowerCase() : '';
+}
+
 function isAuthorized(request: Request, env: Env): boolean {
 	const authorization = request.headers.get('Authorization');
 
 	return authorization === `Bearer ${env.UPLOAD_TOKEN}`;
+}
+
+function startsWithBytes(bytes: Uint8Array, signature: readonly number[], offset = 0): boolean {
+	return signature.every((value, index) => bytes[offset + index] === value);
+}
+
+async function hasValidFileSignature(file: File): Promise<boolean> {
+	if (file.type === 'image/svg+xml') {
+		const text = await file.text();
+		const start = text.replace(/^\uFEFF/, '').trimStart();
+		const isSvgDocument = /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg(?:\s|>)/i.test(start);
+		const hasUnsafeMarkup =
+			/<\s*(?:script|foreignObject|iframe|object|embed)\b/i.test(text) ||
+			/<\s*!DOCTYPE\b/i.test(text) ||
+			/<\?xml-stylesheet\b/i.test(text) ||
+			/\bon[a-z]+\s*=/i.test(text) ||
+			/(?:href|xlink:href)\s*=\s*["']\s*javascript:/i.test(text) ||
+			/url\s*\(\s*["']?\s*javascript:/i.test(text);
+
+		return isSvgDocument && !hasUnsafeMarkup;
+	}
+
+	const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+
+	switch (file.type) {
+		case 'image/jpeg':
+			return startsWithBytes(bytes, [0xff, 0xd8, 0xff]);
+
+		case 'image/png':
+			return startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+		case 'image/gif':
+			return startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) || startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+
+		case 'image/webp':
+			return startsWithBytes(bytes, [0x52, 0x49, 0x46, 0x46]) && startsWithBytes(bytes, [0x57, 0x45, 0x42, 0x50], 8);
+
+		default:
+			return false;
+	}
 }
 
 function timestampSuffix(date = new Date()): string {
@@ -210,11 +262,14 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			);
 		}
 
-		if (!ALLOWED_TYPES.has(file.type)) {
+		const allowedExtensions = ALLOWED_FILE_TYPES.get(file.type);
+
+		if (!allowedExtensions) {
 			return jsonResponse(
 				{
 					success: false,
-					message: `Unsupported file type: ${file.type}`,
+					code: 'UNSUPPORTED_FILE_TYPE',
+					message: '仅支持 JPEG、PNG、WebP、GIF 和 SVG 图片。',
 				},
 				415,
 			);
@@ -234,7 +289,8 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			return jsonResponse(
 				{
 					success: false,
-					message: 'File exceeds the 10 MB limit',
+					code: 'FILE_TOO_LARGE',
+					message: '单张图片不能超过 10 MB。',
 				},
 				413,
 			);
@@ -261,6 +317,30 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 					message: 'Invalid filename',
 				},
 				400,
+			);
+		}
+
+		const extension = filenameExtension(filename);
+
+		if (!allowedExtensions.has(extension)) {
+			return jsonResponse(
+				{
+					success: false,
+					code: 'FILE_EXTENSION_MISMATCH',
+					message: `文件扩展名与 ${file.type} 不匹配。`,
+				},
+				415,
+			);
+		}
+
+		if (!(await hasValidFileSignature(file))) {
+			return jsonResponse(
+				{
+					success: false,
+					code: 'INVALID_FILE_CONTENT',
+					message: file.type === 'image/svg+xml' ? 'SVG 内容无效或包含不安全标记。' : '文件内容与声明的图片类型不匹配。',
+				},
+				415,
 			);
 		}
 

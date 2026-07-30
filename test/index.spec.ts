@@ -3,16 +3,23 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const testKeys = ['common/admin-files-test.png', 'docs/second-test.png'];
 const uploadTestPrefix = 'conflict-tests/';
+const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 async function uploadTestImage(
 	filename: string,
 	content: number[],
-	options: { conflict?: 'reject' | 'rename' | 'overwrite'; expectedEtag?: string } = {},
+	options: {
+		conflict?: 'reject' | 'rename' | 'overwrite';
+		expectedEtag?: string;
+		contentType?: string;
+		includePngSignature?: boolean;
+	} = {},
 ): Promise<Response> {
 	const formData = new FormData();
+	const bytes = options.includePngSignature === false ? content : [...pngSignature, ...content];
 
 	formData.append('folder', uploadTestPrefix.slice(0, -1));
-	formData.append('file', new File([new Uint8Array(content)], filename, { type: 'image/png' }));
+	formData.append('file', new File([new Uint8Array(bytes)], filename, { type: options.contentType ?? 'image/png' }));
 
 	if (options.conflict) {
 		formData.append('conflict', options.conflict);
@@ -206,6 +213,60 @@ describe('image center worker', () => {
 
 		const object = await env.IMAGES.get(key);
 
-		expect([...new Uint8Array(await object!.arrayBuffer())]).toEqual([4]);
+		expect([...new Uint8Array(await object!.arrayBuffer())]).toEqual([...pngSignature, 4]);
+	});
+
+	it('rejects unsupported, mismatched and disguised file types', async () => {
+		const htmlResponse = await uploadTestImage('page.html', [0x3c, 0x68, 0x74, 0x6d, 0x6c], {
+			contentType: 'text/html',
+			includePngSignature: false,
+		});
+		const extensionMismatch = await uploadTestImage('photo.jpg', [1, 2, 3]);
+		const disguisedHtml = await uploadTestImage('page.png', [0x3c, 0x68, 0x74, 0x6d, 0x6c], {
+			includePngSignature: false,
+		});
+
+		expect(htmlResponse.status).toBe(415);
+		expect(await htmlResponse.json()).toMatchObject({ code: 'UNSUPPORTED_FILE_TYPE' });
+		expect(extensionMismatch.status).toBe(415);
+		expect(await extensionMismatch.json()).toMatchObject({ code: 'FILE_EXTENSION_MISMATCH' });
+		expect(disguisedHtml.status).toBe(415);
+		expect(await disguisedHtml.json()).toMatchObject({ code: 'INVALID_FILE_CONTENT' });
+	});
+
+	it('rejects files over 10 MB before writing to R2', async () => {
+		const oversized = new Uint8Array(10 * 1024 * 1024 + 1);
+		const formData = new FormData();
+
+		oversized.set(pngSignature);
+		formData.append('folder', uploadTestPrefix.slice(0, -1));
+		formData.append('file', new File([oversized], 'large.png', { type: 'image/png' }));
+
+		const response = await SELF.fetch('https://example.com/api/upload', {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` },
+			body: formData,
+		});
+
+		expect(response.status).toBe(413);
+		expect(await response.json()).toMatchObject({ code: 'FILE_TOO_LARGE' });
+		expect(await env.IMAGES.head(`${uploadTestPrefix}large.png`)).toBeNull();
+	});
+
+	it('accepts safe SVG files and rejects active SVG content', async () => {
+		const safeSvg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+		const unsafeSvg = '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script></svg>';
+		const safeResponse = await uploadTestImage('safe.svg', [...new TextEncoder().encode(safeSvg)], {
+			contentType: 'image/svg+xml',
+			includePngSignature: false,
+		});
+		const unsafeResponse = await uploadTestImage('unsafe.svg', [...new TextEncoder().encode(unsafeSvg)], {
+			contentType: 'image/svg+xml',
+			includePngSignature: false,
+		});
+
+		expect(safeResponse.status).toBe(200);
+		expect(unsafeResponse.status).toBe(415);
+		expect(await unsafeResponse.json()).toMatchObject({ code: 'INVALID_FILE_CONTENT' });
 	});
 });

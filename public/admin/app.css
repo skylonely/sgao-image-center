@@ -160,6 +160,12 @@ select:focus {
 	font-size: 14px;
 }
 
+.drop-zone small {
+	margin-top: 12px;
+	color: #98a2b3;
+	font-size: 12px;
+}
+
 .drop-icon {
 	display: grid;
 	width: 58px;
@@ -241,6 +247,7 @@ select:focus {
 	border-radius: 12px;
 	line-height: 1.65;
 	word-break: break-all;
+	white-space: pre-line;
 }
 
 .status.success {

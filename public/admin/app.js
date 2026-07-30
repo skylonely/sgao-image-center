@@ -16,6 +16,15 @@ const renameButton = document.querySelector('#renameButton');
 let selectedFiles = [];
 let conflictResolver = null;
 
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const ALLOWED_FILE_TYPES = new Map([
+	['image/jpeg', new Set(['jpg', 'jpeg'])],
+	['image/png', new Set(['png'])],
+	['image/webp', new Set(['webp'])],
+	['image/gif', new Set(['gif'])],
+	['image/svg+xml', new Set(['svg'])],
+]);
+
 tokenInput.value = sessionStorage.getItem('sgaoUploadToken') || '';
 
 folderSelect.value = localStorage.getItem('sgaoUploadFolder') || 'common';
@@ -52,14 +61,11 @@ dropZone.addEventListener('drop', (event) => {
 	event.preventDefault();
 	dropZone.classList.remove('dragging');
 
-	selectedFiles = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith('image/'));
-
-	renderFiles();
+	selectFiles(Array.from(event.dataTransfer.files));
 });
 
 fileInput.addEventListener('change', () => {
-	selectedFiles = Array.from(fileInput.files || []);
-	renderFiles();
+	selectFiles(Array.from(fileInput.files || []));
 });
 
 function formatSize(bytes) {
@@ -72,6 +78,59 @@ function formatSize(bytes) {
 	}
 
 	return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function fileExtension(filename) {
+	const extensionIndex = filename.lastIndexOf('.');
+
+	return extensionIndex > 0 ? filename.slice(extensionIndex + 1).toLowerCase() : '';
+}
+
+function validateSelectedFile(file) {
+	if (file.size <= 0) {
+		return '文件为空';
+	}
+
+	if (file.size > MAX_FILE_SIZE) {
+		return '超过 10 MB';
+	}
+
+	const extensions = ALLOWED_FILE_TYPES.get(file.type);
+
+	if (!extensions) {
+		return '仅支持 JPEG、PNG、WebP、GIF 和 SVG';
+	}
+
+	if (!extensions.has(fileExtension(file.name))) {
+		return '扩展名与图片类型不匹配';
+	}
+
+	return null;
+}
+
+function selectFiles(files) {
+	const validFiles = [];
+	const validationErrors = [];
+
+	for (const file of files) {
+		const error = validateSelectedFile(file);
+
+		if (error) {
+			validationErrors.push(`${file.name}: ${error}`);
+		} else {
+			validFiles.push(file);
+		}
+	}
+
+	selectedFiles = validFiles;
+	renderFiles();
+
+	if (validationErrors.length) {
+		showError(`以下文件未加入上传列表：\n${validationErrors.join('\n')}`);
+	} else {
+		statusBox.className = 'status';
+		statusBox.textContent = '';
+	}
 }
 
 function renderFiles() {
