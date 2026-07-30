@@ -247,7 +247,6 @@ select:focus {
 	border-radius: 12px;
 	line-height: 1.65;
 	word-break: break-all;
-	white-space: pre-line;
 }
 
 .status.success {
@@ -262,6 +261,7 @@ select:focus {
 	color: #b42318;
 	background: #fef3f2;
 	border: 1px solid #fecdca;
+	white-space: pre-line;
 }
 
 .result-list {
@@ -307,13 +307,18 @@ select:focus {
 }
 
 .secondary-button {
+	display: inline-flex;
 	width: auto;
 	height: 36px;
 	padding: 0 13px;
+	align-items: center;
+	justify-content: center;
 	color: #fff;
 	background: #111827;
 	border: 0;
 	border-radius: 8px;
+	line-height: 1;
+	white-space: nowrap;
 	cursor: pointer;
 }
 
