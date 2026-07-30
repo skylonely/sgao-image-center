@@ -1,3 +1,4 @@
+import { handleFiles } from './routes/files';
 import { handleImage } from './routes/image';
 import { handleUpload } from './routes/upload';
 
@@ -14,14 +15,19 @@ export default {
 			});
 		}
 
-		// 管理后台及其静态资源
-		if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
-			return env.ASSETS.fetch(request);
-		}
-
 		// 上传 API
 		if (url.pathname === '/api/upload') {
 			return handleUpload(request, env);
+		}
+
+		// 文件管理 API
+		if (url.pathname === '/api/files') {
+			return handleFiles(request, env);
+		}
+
+		// 管理后台及其静态资源
+		if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+			return env.ASSETS.fetch(request);
 		}
 
 		// 其他路径作为图片路径处理

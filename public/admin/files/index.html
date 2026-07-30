@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content="浏览和管理 Image Center 中的图片文件。" />
+		<title>文件管理 · SGAO Image Center</title>
+		<link rel="stylesheet" href="/admin/app.css" />
+	</head>
+
+	<body>
+		<main class="page files-page">
+			<header class="page-header files-header">
+				<div>
+					<a class="back-link" href="/admin/">← 返回上传</a>
+					<h1>Files</h1>
+					<p class="subtitle">浏览、复制和管理 R2 中的图片。</p>
+				</div>
+
+				<button id="refreshButton" class="icon-button" type="button" aria-label="刷新文件列表" title="刷新">
+					<svg aria-hidden="true" viewBox="0 0 24 24">
+						<path d="M20 11a8.1 8.1 0 0 0-15.5-3M4 4v4h4M4 13a8.1 8.1 0 0 0 15.5 3M20 20v-4h-4" />
+					</svg>
+				</button>
+			</header>
+
+			<section id="authPanel" class="panel auth-panel">
+				<div class="field compact-field">
+					<label for="filesToken">管理密钥</label>
+					<div class="input-action">
+						<input id="filesToken" type="password" placeholder="请输入 UPLOAD_TOKEN" autocomplete="off" />
+						<button id="loadButton" class="primary-button inline-button" type="button">查看文件</button>
+					</div>
+					<p class="help-text">与上传页共用当前标签页中的密钥，关闭标签页后自动清除。</p>
+				</div>
+			</section>
+
+			<section id="manager" class="files-manager" hidden>
+				<div class="manager-toolbar">
+					<div class="search-box">
+						<svg aria-hidden="true" viewBox="0 0 24 24">
+							<circle cx="11" cy="11" r="7" />
+							<path d="m20 20-4-4" />
+						</svg>
+						<input id="searchInput" type="search" placeholder="搜索文件名或目录" aria-label="搜索文件" />
+					</div>
+
+					<p id="fileCount" class="file-count" aria-live="polite"></p>
+				</div>
+
+				<div id="managerStatus" class="manager-status" role="status" aria-live="polite"></div>
+				<div id="folderList" class="folder-list"></div>
+
+				<button id="loadMoreButton" class="load-more-button" type="button" hidden>加载更多</button>
+			</section>
+		</main>
+
+		<div id="deleteDialog" class="modal-backdrop" hidden>
+			<div class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteTitle" aria-describedby="deleteDescription">
+				<div class="danger-icon" aria-hidden="true">
+					<svg viewBox="0 0 24 24">
+						<path d="M12 9v4m0 4h.01M10.3 3.9 2.6 17.2A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.8L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+					</svg>
+				</div>
+				<h2 id="deleteTitle">删除这张图片？</h2>
+				<p id="deleteDescription">此操作无法撤销。</p>
+				<code id="deleteKey"></code>
+				<div class="dialog-actions">
+					<button id="cancelDeleteButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmDeleteButton" class="dialog-button danger" type="button">确认删除</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+		<script src="/admin/files/files.js"></script>
+	</body>
+</html>
