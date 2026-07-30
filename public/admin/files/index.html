@@ -45,7 +45,19 @@
 						<input id="searchInput" type="search" placeholder="搜索文件名或目录" aria-label="搜索文件" />
 					</div>
 
-					<p id="fileCount" class="file-count" aria-live="polite"></p>
+					<div class="manager-meta">
+						<p id="fileCount" class="file-count" aria-live="polite"></p>
+						<button id="selectVisibleButton" class="toolbar-button" type="button">选择当前</button>
+					</div>
+				</div>
+
+				<div id="selectionBar" class="selection-bar" hidden>
+					<strong id="selectedCount">已选择 0 个文件</strong>
+					<span>单次最多选择 50 个</span>
+					<div class="selection-actions">
+						<button id="clearSelectionButton" class="toolbar-button" type="button">取消选择</button>
+						<button id="batchDeleteButton" class="toolbar-button danger" type="button">删除所选</button>
+					</div>
 				</div>
 
 				<div id="managerStatus" class="manager-status" role="status" aria-live="polite"></div>
@@ -90,6 +102,28 @@
 					</button>
 				</div>
 			</div>
+		</div>
+
+		<div id="renameDialog" class="modal-backdrop" hidden>
+			<form id="renameForm" class="delete-dialog rename-dialog" role="dialog" aria-modal="true" aria-labelledby="renameTitle">
+				<div class="rename-icon" aria-hidden="true">
+					<svg viewBox="0 0 24 24">
+						<path d="m4 20 4.2-1 10.6-10.6a2.1 2.1 0 0 0-3-3L5.2 16Z" />
+						<path d="m14.5 6.7 3 3M4 20h16" />
+					</svg>
+				</div>
+				<h2 id="renameTitle">重命名文件</h2>
+				<p>文件仍保留在当前目录，扩展名不能修改。</p>
+
+				<label class="rename-label" for="renameInput">新文件名</label>
+				<input id="renameInput" type="text" maxlength="255" autocomplete="off" />
+				<p id="renameError" class="rename-error" role="alert" hidden></p>
+
+				<div class="dialog-actions">
+					<button id="cancelRenameButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmRenameButton" class="dialog-button primary-choice" type="submit">保存名称</button>
+				</div>
+			</form>
 		</div>
 
 		<div id="deleteDialog" class="modal-backdrop" hidden>

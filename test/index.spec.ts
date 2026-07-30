@@ -13,12 +13,13 @@ async function uploadTestImage(
 		expectedEtag?: string;
 		contentType?: string;
 		includePngSignature?: boolean;
+		folder?: string;
 	} = {},
 ): Promise<Response> {
 	const formData = new FormData();
 	const bytes = options.includePngSignature === false ? content : [...pngSignature, ...content];
 
-	formData.append('folder', uploadTestPrefix.slice(0, -1));
+	formData.append('folder', options.folder ?? uploadTestPrefix.slice(0, -1));
 	formData.append('file', new File([new Uint8Array(bytes)], filename, { type: options.contentType ?? 'image/png' }));
 
 	if (options.conflict) {
@@ -268,5 +269,101 @@ describe('image center worker', () => {
 		expect(safeResponse.status).toBe(200);
 		expect(unsafeResponse.status).toBe(415);
 		expect(await unsafeResponse.json()).toMatchObject({ code: 'INVALID_FILE_CONTENT' });
+	});
+
+	it('uploads into a valid custom nested directory', async () => {
+		const response = await uploadTestImage('nested.png', [1, 2, 3], {
+			folder: 'conflict-tests/guides/intro',
+		});
+		const result = await response.json<{ success: boolean; key: string; folder: string }>();
+
+		expect(response.status).toBe(200);
+		expect(result).toMatchObject({
+			success: true,
+			key: 'conflict-tests/guides/intro/nested.png',
+			folder: 'conflict-tests/guides/intro',
+		});
+		expect(await env.IMAGES.head(result.key)).not.toBeNull();
+	});
+
+	it('renames a file without changing its contents or overwriting another key', async () => {
+		const sourceKey = `${uploadTestPrefix}before.png`;
+		const targetKey = `${uploadTestPrefix}after.png`;
+
+		await env.IMAGES.put(sourceKey, new Uint8Array([...pngSignature, 7]), {
+			httpMetadata: { contentType: 'image/png', cacheControl: 'public, max-age=60' },
+			customMetadata: { originalFilename: 'before.png' },
+		});
+
+		const source = await env.IMAGES.head(sourceKey);
+		const response = await SELF.fetch('https://example.com/api/files', {
+			method: 'PATCH',
+			headers: {
+				Authorization: `Bearer ${env.UPLOAD_TOKEN}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				key: sourceKey,
+				newFilename: 'after.png',
+				expectedEtag: source!.etag,
+			}),
+		});
+		const result = await response.json<{ success: boolean; previousKey: string; file: { key: string; etag: string } }>();
+
+		expect(response.status).toBe(200);
+		expect(result).toMatchObject({
+			success: true,
+			previousKey: sourceKey,
+			file: { key: targetKey },
+		});
+		expect(await env.IMAGES.head(sourceKey)).toBeNull();
+
+		const renamed = await env.IMAGES.get(targetKey);
+
+		expect([...new Uint8Array(await renamed!.arrayBuffer())]).toEqual([...pngSignature, 7]);
+		expect(renamed!.httpMetadata.contentType).toBe('image/png');
+
+		await env.IMAGES.put(sourceKey, new Uint8Array([1]));
+
+		const conflictResponse = await SELF.fetch('https://example.com/api/files', {
+			method: 'PATCH',
+			headers: {
+				Authorization: `Bearer ${env.UPLOAD_TOKEN}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				key: sourceKey,
+				newFilename: 'after.png',
+			}),
+		});
+
+		expect(conflictResponse.status).toBe(409);
+		expect(await conflictResponse.json()).toMatchObject({ code: 'FILE_EXISTS' });
+	});
+
+	it('deletes multiple selected files in one request', async () => {
+		const keys = [`${uploadTestPrefix}batch-1.png`, `${uploadTestPrefix}batch-2.png`, `${uploadTestPrefix}batch-3.png`];
+
+		await Promise.all(keys.map((key, index) => env.IMAGES.put(key, new Uint8Array([index]))));
+
+		const response = await SELF.fetch('https://example.com/api/files', {
+			method: 'DELETE',
+			headers: {
+				Authorization: `Bearer ${env.UPLOAD_TOKEN}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ keys }),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			success: true,
+			deletedKeys: keys,
+			deletedCount: 3,
+		});
+
+		for (const key of keys) {
+			expect(await env.IMAGES.head(key)).toBeNull();
+		}
 	});
 });

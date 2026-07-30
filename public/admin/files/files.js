@@ -8,10 +8,23 @@ const fileCount = document.querySelector('#fileCount');
 const managerStatus = document.querySelector('#managerStatus');
 const folderList = document.querySelector('#folderList');
 const loadMoreButton = document.querySelector('#loadMoreButton');
+const selectVisibleButton = document.querySelector('#selectVisibleButton');
+const selectionBar = document.querySelector('#selectionBar');
+const selectedCount = document.querySelector('#selectedCount');
+const clearSelectionButton = document.querySelector('#clearSelectionButton');
+const batchDeleteButton = document.querySelector('#batchDeleteButton');
 const deleteDialog = document.querySelector('#deleteDialog');
+const deleteTitle = document.querySelector('#deleteTitle');
+const deleteDescription = document.querySelector('#deleteDescription');
 const deleteKey = document.querySelector('#deleteKey');
 const cancelDeleteButton = document.querySelector('#cancelDeleteButton');
 const confirmDeleteButton = document.querySelector('#confirmDeleteButton');
+const renameDialog = document.querySelector('#renameDialog');
+const renameForm = document.querySelector('#renameForm');
+const renameInput = document.querySelector('#renameInput');
+const renameError = document.querySelector('#renameError');
+const cancelRenameButton = document.querySelector('#cancelRenameButton');
+const confirmRenameButton = document.querySelector('#confirmRenameButton');
 const toast = document.querySelector('#toast');
 const imagePreview = document.querySelector('#imagePreview');
 const previewImage = document.querySelector('#previewImage');
@@ -25,12 +38,15 @@ const nextPreviewButton = document.querySelector('#nextPreviewButton');
 
 let files = [];
 let renderedFiles = [];
+let selectedKeys = new Set();
 let cursor = null;
-let pendingDeleteKey = null;
+let pendingDeleteKeys = [];
+let pendingRenameFile = null;
 let toastTimer = null;
 let previewIndex = -1;
 let lastPreviewTrigger = null;
 
+const MAX_BATCH_DELETE = 50;
 const collapsedFolders = new Set(readCollapsedFolders());
 
 tokenInput.value = sessionStorage.getItem('sgaoUploadToken') || '';
@@ -49,13 +65,24 @@ loadButton.addEventListener('click', () => loadFiles({ reset: true }));
 refreshButton.addEventListener('click', () => loadFiles({ reset: true }));
 loadMoreButton.addEventListener('click', () => loadFiles({ reset: false }));
 searchInput.addEventListener('input', renderFiles);
+selectVisibleButton.addEventListener('click', toggleVisibleSelection);
+clearSelectionButton.addEventListener('click', clearSelection);
+batchDeleteButton.addEventListener('click', () => openDeleteDialog([...selectedKeys]));
 
 cancelDeleteButton.addEventListener('click', closeDeleteDialog);
 confirmDeleteButton.addEventListener('click', deleteFile);
+cancelRenameButton.addEventListener('click', closeRenameDialog);
+renameForm.addEventListener('submit', renameFile);
 
 deleteDialog.addEventListener('click', (event) => {
 	if (event.target === deleteDialog) {
 		closeDeleteDialog();
+	}
+});
+
+renameDialog.addEventListener('click', (event) => {
+	if (event.target === renameDialog) {
+		closeRenameDialog();
 	}
 });
 
@@ -69,6 +96,11 @@ document.addEventListener('keydown', (event) => {
 			showNextPreview();
 		}
 
+		return;
+	}
+
+	if (event.key === 'Escape' && !renameDialog.hidden) {
+		closeRenameDialog();
 		return;
 	}
 
@@ -222,10 +254,13 @@ function saveCollapsedFolders() {
 function renderFiles() {
 	const query = searchInput.value.trim().toLocaleLowerCase();
 	const visibleFiles = query ? files.filter((file) => file.key.toLocaleLowerCase().includes(query)) : files;
+	const availableKeys = new Set(files.map((file) => file.key));
 
 	renderedFiles = visibleFiles;
+	selectedKeys = new Set([...selectedKeys].filter((key) => availableKeys.has(key)));
 	fileCount.textContent = query ? `${visibleFiles.length} / ${files.length} 个文件` : `${files.length} 个文件`;
 	folderList.replaceChildren();
+	updateSelectionUI();
 
 	if (!visibleFiles.length) {
 		const empty = document.createElement('div');
@@ -309,6 +344,8 @@ function renderFiles() {
 
 function createFileRow(file) {
 	const row = document.createElement('article');
+	const selectLabel = document.createElement('label');
+	const checkbox = document.createElement('input');
 	const preview = document.createElement('button');
 	const image = document.createElement('img');
 	const details = document.createElement('div');
@@ -317,6 +354,31 @@ function createFileRow(file) {
 	const actions = document.createElement('div');
 
 	row.className = 'file-row';
+	row.classList.toggle('selected', selectedKeys.has(file.key));
+
+	selectLabel.className = 'file-select';
+	selectLabel.title = `选择 ${file.filename}`;
+	checkbox.type = 'checkbox';
+	checkbox.checked = selectedKeys.has(file.key);
+	checkbox.setAttribute('aria-label', `选择 ${file.filename}`);
+	checkbox.addEventListener('change', () => {
+		if (checkbox.checked) {
+			if (selectedKeys.size >= MAX_BATCH_DELETE) {
+				checkbox.checked = false;
+				showToast(`单次最多选择 ${MAX_BATCH_DELETE} 个文件`);
+				return;
+			}
+
+			selectedKeys.add(file.key);
+		} else {
+			selectedKeys.delete(file.key);
+		}
+
+		row.classList.toggle('selected', checkbox.checked);
+		updateSelectionUI();
+	});
+	selectLabel.append(checkbox);
+
 	preview.className = 'file-preview';
 	preview.type = 'button';
 	preview.setAttribute('aria-label', `预览 ${file.filename}`);
@@ -349,12 +411,58 @@ function createFileRow(file) {
 		createActionButton('复制地址', 'copy', () => copyText(file.url, '地址已复制')),
 		createActionButton('Markdown', 'markdown', () => copyText(`![](${file.url})`, 'Markdown 已复制')),
 		createOpenLink(file.url),
+		createActionButton('重命名', 'rename', () => openRenameDialog(file)),
 		createActionButton('删除', 'delete', () => openDeleteDialog(file.key)),
 	);
 
-	row.append(preview, details, actions);
+	row.append(selectLabel, preview, details, actions);
 
 	return row;
+}
+
+function updateSelectionUI() {
+	const selectedVisibleCount = renderedFiles.filter((file) => selectedKeys.has(file.key)).length;
+	const allVisibleSelected = renderedFiles.length > 0 && selectedVisibleCount === renderedFiles.length;
+	const selectionAtLimit = selectedVisibleCount > 0 && selectedKeys.size >= MAX_BATCH_DELETE;
+
+	selectionBar.hidden = selectedKeys.size === 0;
+	selectedCount.textContent = `已选择 ${selectedKeys.size} 个文件`;
+	batchDeleteButton.textContent = `删除所选（${selectedKeys.size}）`;
+	selectVisibleButton.textContent =
+		allVisibleSelected || selectionAtLimit ? '取消当前选择' : renderedFiles.length > MAX_BATCH_DELETE ? '选择前 50 个' : '选择当前';
+	selectVisibleButton.disabled = renderedFiles.length === 0;
+}
+
+function toggleVisibleSelection() {
+	const visibleKeys = renderedFiles.map((file) => file.key);
+	const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.has(key));
+	const selectedVisibleCount = visibleKeys.filter((key) => selectedKeys.has(key)).length;
+	const selectionAtLimit = selectedVisibleCount > 0 && selectedKeys.size >= MAX_BATCH_DELETE;
+
+	if (allVisibleSelected || selectionAtLimit) {
+		for (const key of visibleKeys) {
+			selectedKeys.delete(key);
+		}
+	} else {
+		for (const key of visibleKeys) {
+			if (selectedKeys.size >= MAX_BATCH_DELETE) {
+				break;
+			}
+
+			selectedKeys.add(key);
+		}
+
+		if (visibleKeys.length > MAX_BATCH_DELETE) {
+			showToast(`已选择前 ${MAX_BATCH_DELETE} 个文件`);
+		}
+	}
+
+	renderFiles();
+}
+
+function clearSelection() {
+	selectedKeys.clear();
+	renderFiles();
 }
 
 function openImagePreview(key, trigger) {
@@ -413,6 +521,75 @@ function showPreviousPreview() {
 	if (previewIndex > 0) {
 		previewIndex -= 1;
 		updateImagePreview();
+	}
+}
+
+function openRenameDialog(file) {
+	pendingRenameFile = file;
+	renameInput.value = file.key.split('/').at(-1) || file.key;
+	renameError.hidden = true;
+	renameError.textContent = '';
+	renameDialog.hidden = false;
+	document.body.classList.add('modal-open');
+	renameInput.focus();
+	renameInput.select();
+}
+
+function closeRenameDialog() {
+	pendingRenameFile = null;
+	renameDialog.hidden = true;
+	renameError.hidden = true;
+	renameError.textContent = '';
+	document.body.classList.remove('modal-open');
+}
+
+async function renameFile(event) {
+	event.preventDefault();
+
+	if (!pendingRenameFile) {
+		return;
+	}
+
+	const source = pendingRenameFile;
+	const newFilename = renameInput.value.trim();
+
+	if (!newFilename) {
+		renameError.textContent = '请输入新文件名。';
+		renameError.hidden = false;
+		renameInput.focus();
+		return;
+	}
+
+	confirmRenameButton.disabled = true;
+	confirmRenameButton.textContent = '保存中…';
+	renameError.hidden = true;
+
+	try {
+		const result = await requestFiles('/api/files', {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				key: source.key,
+				newFilename,
+				expectedEtag: source.etag,
+			}),
+		});
+
+		files = files.map((file) => (file.key === source.key ? result.file : file));
+
+		if (selectedKeys.delete(source.key)) {
+			selectedKeys.add(result.file.key);
+		}
+
+		closeRenameDialog();
+		renderFiles();
+		showToast(`已重命名为 ${newFilename}`);
+	} catch (error) {
+		renameError.textContent = error.message || '重命名失败，请稍后重试。';
+		renameError.hidden = false;
+	} finally {
+		confirmRenameButton.disabled = false;
+		confirmRenameButton.textContent = '保存名称';
 	}
 }
 
@@ -486,36 +663,63 @@ async function copyText(value, successMessage) {
 	}
 }
 
-function openDeleteDialog(key) {
-	pendingDeleteKey = key;
-	deleteKey.textContent = key;
+function openDeleteDialog(value) {
+	const keys = Array.isArray(value) ? value : [value];
+
+	if (!keys.length) {
+		return;
+	}
+
+	pendingDeleteKeys = keys.slice(0, MAX_BATCH_DELETE);
+	deleteTitle.textContent = pendingDeleteKeys.length === 1 ? '删除这张图片？' : `删除 ${pendingDeleteKeys.length} 张图片？`;
+	deleteDescription.textContent = pendingDeleteKeys.length === 1 ? '此操作无法撤销。' : '批量删除无法撤销，请确认所选文件。';
+	deleteKey.textContent =
+		pendingDeleteKeys.length === 1
+			? pendingDeleteKeys[0]
+			: `${pendingDeleteKeys.slice(0, 3).join('\n')}${pendingDeleteKeys.length > 3 ? `\n…以及另外 ${pendingDeleteKeys.length - 3} 个文件` : ''}`;
 	deleteDialog.hidden = false;
 	document.body.classList.add('modal-open');
 	confirmDeleteButton.focus();
 }
 
 function closeDeleteDialog() {
-	pendingDeleteKey = null;
+	pendingDeleteKeys = [];
 	deleteDialog.hidden = true;
 	document.body.classList.remove('modal-open');
 }
 
 async function deleteFile() {
-	if (!pendingDeleteKey) {
+	if (!pendingDeleteKeys.length) {
 		return;
 	}
 
-	const key = pendingDeleteKey;
+	const keys = [...pendingDeleteKeys];
 
 	confirmDeleteButton.disabled = true;
 	confirmDeleteButton.textContent = '删除中…';
 
 	try {
-		await requestFiles(`/api/files?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
-		files = files.filter((file) => file.key !== key);
+		if (keys.length === 1) {
+			await requestFiles(`/api/files?key=${encodeURIComponent(keys[0])}`, { method: 'DELETE' });
+		} else {
+			await requestFiles('/api/files', {
+				method: 'DELETE',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ keys }),
+			});
+		}
+
+		const deletedKeys = new Set(keys);
+
+		files = files.filter((file) => !deletedKeys.has(file.key));
+
+		for (const key of keys) {
+			selectedKeys.delete(key);
+		}
+
 		closeDeleteDialog();
 		renderFiles();
-		showToast('图片已删除');
+		showToast(keys.length === 1 ? '图片已删除' : `已删除 ${keys.length} 张图片`);
 	} catch (error) {
 		closeDeleteDialog();
 		showManagerError(error.message || '删除失败，请稍后重试。');

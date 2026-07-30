@@ -1,5 +1,5 @@
 const tokenInput = document.querySelector('#token');
-const folderSelect = document.querySelector('#folder');
+const folderInput = document.querySelector('#folder');
 const dropZone = document.querySelector('#dropZone');
 const fileInput = document.querySelector('#fileInput');
 const fileList = document.querySelector('#fileList');
@@ -27,14 +27,14 @@ const ALLOWED_FILE_TYPES = new Map([
 
 tokenInput.value = sessionStorage.getItem('sgaoUploadToken') || '';
 
-folderSelect.value = localStorage.getItem('sgaoUploadFolder') || 'common';
+folderInput.value = localStorage.getItem('sgaoUploadFolder') || 'common';
 
 tokenInput.addEventListener('input', () => {
 	sessionStorage.setItem('sgaoUploadToken', tokenInput.value.trim());
 });
 
-folderSelect.addEventListener('change', () => {
-	localStorage.setItem('sgaoUploadFolder', folderSelect.value);
+folderInput.addEventListener('input', () => {
+	localStorage.setItem('sgaoUploadFolder', folderInput.value.trim());
 });
 
 dropZone.addEventListener('click', () => {
@@ -84,6 +84,16 @@ function fileExtension(filename) {
 	const extensionIndex = filename.lastIndexOf('.');
 
 	return extensionIndex > 0 ? filename.slice(extensionIndex + 1).toLowerCase() : '';
+}
+
+function normalizeFolder(value) {
+	const folder = value.trim().replace(/^\/+|\/+$/g, '');
+
+	if (!folder) {
+		return 'common';
+	}
+
+	return folder.split('/').every((segment) => /^[a-z0-9][a-z0-9_-]*$/i.test(segment)) ? folder : null;
 }
 
 function validateSelectedFile(file) {
@@ -342,7 +352,7 @@ async function uploadWithConflictChoice(file, folder, token) {
 
 uploadButton.addEventListener('click', async () => {
 	const token = tokenInput.value.trim();
-	const folder = folderSelect.value;
+	const folder = normalizeFolder(folderInput.value);
 
 	if (!token) {
 		showError('请输入上传密钥。');
@@ -353,6 +363,15 @@ uploadButton.addEventListener('click', async () => {
 		showError('请选择至少一张图片。');
 		return;
 	}
+
+	if (!folder) {
+		showError('目录格式不正确。每一段只能使用字母、数字、短横线和下划线。');
+		folderInput.focus();
+		return;
+	}
+
+	folderInput.value = folder;
+	localStorage.setItem('sgaoUploadFolder', folder);
 
 	uploadButton.disabled = true;
 	uploadButton.textContent = '正在上传……';
