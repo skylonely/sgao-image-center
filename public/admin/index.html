@@ -51,6 +51,35 @@
 			</section>
 		</main>
 
+		<div id="conflictDialog" class="modal-backdrop" hidden>
+			<div class="delete-dialog conflict-dialog" role="dialog" aria-modal="true" aria-labelledby="conflictTitle" aria-describedby="conflictDescription">
+				<div class="conflict-icon" aria-hidden="true">
+					<svg viewBox="0 0 24 24">
+						<path d="M12 8v4m0 4h.01M5 4h10l4 4v12H5Z" />
+						<path d="M15 4v4h4" />
+					</svg>
+				</div>
+				<h2 id="conflictTitle">发现同名文件</h2>
+				<p id="conflictDescription">R2 中已存在这个文件。请选择如何处理，旧图不会被自动覆盖。</p>
+
+				<div class="conflict-file">
+					<code id="conflictKey"></code>
+					<span id="conflictMeta"></span>
+				</div>
+
+				<div class="rename-preview">
+					<span>保留两者时将保存为</span>
+					<strong id="suggestedFilename"></strong>
+				</div>
+
+				<div class="dialog-actions conflict-actions">
+					<button id="cancelConflictButton" class="dialog-button" type="button">取消此文件</button>
+					<button id="overwriteButton" class="dialog-button overwrite" type="button">覆盖旧图</button>
+					<button id="renameButton" class="dialog-button primary-choice" type="button">保留两者</button>
+				</div>
+			</div>
+		</div>
+
 		<script src="/admin/app.js"></script>
 	</body>
 </html>

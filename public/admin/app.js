@@ -5,8 +5,16 @@ const fileInput = document.querySelector('#fileInput');
 const fileList = document.querySelector('#fileList');
 const uploadButton = document.querySelector('#uploadButton');
 const statusBox = document.querySelector('#status');
+const conflictDialog = document.querySelector('#conflictDialog');
+const conflictKey = document.querySelector('#conflictKey');
+const conflictMeta = document.querySelector('#conflictMeta');
+const suggestedFilename = document.querySelector('#suggestedFilename');
+const cancelConflictButton = document.querySelector('#cancelConflictButton');
+const overwriteButton = document.querySelector('#overwriteButton');
+const renameButton = document.querySelector('#renameButton');
 
 let selectedFiles = [];
+let conflictResolver = null;
 
 tokenInput.value = sessionStorage.getItem('sgaoUploadToken') || '';
 
@@ -104,6 +112,13 @@ function showResults(results, failures) {
 					.map(
 						(result) => `
 							<div class="result-item">
+								${
+									result.renamed
+										? `<div class="result-note">同名文件已保留，新图片保存为 <strong>${escapeHtml(result.filename)}</strong></div>`
+										: result.overwritten
+											? '<div class="result-note warning">已按你的选择覆盖旧图片</div>'
+											: ''
+								}
 								<div class="result-url">
 									${escapeHtml(result.url)}
 								</div>
@@ -160,6 +175,112 @@ function showResults(results, failures) {
 	});
 }
 
+function formatDate(value) {
+	return new Intl.DateTimeFormat('zh-CN', {
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+	}).format(new Date(value));
+}
+
+function chooseConflict(conflict) {
+	conflictKey.textContent = conflict.key;
+	conflictMeta.textContent = `现有文件：${formatSize(conflict.existing.size)} · 上传于 ${formatDate(conflict.existing.uploaded)}`;
+	suggestedFilename.textContent = conflict.suggestedFilename;
+	conflictDialog.hidden = false;
+	document.body.classList.add('modal-open');
+	renameButton.focus();
+
+	return new Promise((resolve) => {
+		conflictResolver = resolve;
+	});
+}
+
+function resolveConflict(choice) {
+	if (!conflictResolver) {
+		return;
+	}
+
+	const resolve = conflictResolver;
+
+	conflictResolver = null;
+	conflictDialog.hidden = true;
+	document.body.classList.remove('modal-open');
+	resolve(choice);
+}
+
+cancelConflictButton.addEventListener('click', () => resolveConflict('cancel'));
+overwriteButton.addEventListener('click', () => resolveConflict('overwrite'));
+renameButton.addEventListener('click', () => resolveConflict('rename'));
+
+conflictDialog.addEventListener('click', (event) => {
+	if (event.target === conflictDialog) {
+		resolveConflict('cancel');
+	}
+});
+
+document.addEventListener('keydown', (event) => {
+	if (event.key === 'Escape' && !conflictDialog.hidden) {
+		resolveConflict('cancel');
+	}
+});
+
+async function sendUpload(file, folder, token, conflict = 'reject', expectedEtag = '') {
+	const formData = new FormData();
+
+	formData.append('folder', folder);
+	formData.append('file', file);
+	formData.append('conflict', conflict);
+
+	if (expectedEtag) {
+		formData.append('expectedEtag', expectedEtag);
+	}
+
+	const response = await fetch('/api/upload', {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${token}`,
+		},
+		body: formData,
+	});
+
+	const result = await response.json();
+
+	if (response.status === 409 && (result.code === 'FILE_EXISTS' || result.code === 'FILE_CHANGED')) {
+		return { conflict: result };
+	}
+
+	if (!response.ok || !result.success) {
+		throw new Error(result.message || '上传失败');
+	}
+
+	return { result };
+}
+
+async function uploadWithConflictChoice(file, folder, token) {
+	let attempt = await sendUpload(file, folder, token);
+
+	while (attempt.conflict) {
+		const choice = await chooseConflict(attempt.conflict);
+
+		if (choice === 'cancel') {
+			return { cancelled: true };
+		}
+
+		attempt = await sendUpload(
+			file,
+			folder,
+			token,
+			choice,
+			choice === 'overwrite' ? attempt.conflict.etag : '',
+		);
+	}
+
+	return attempt;
+}
+
 uploadButton.addEventListener('click', async () => {
 	const token = tokenInput.value.trim();
 	const folder = folderSelect.value;
@@ -185,26 +306,14 @@ uploadButton.addEventListener('click', async () => {
 
 	for (const file of selectedFiles) {
 		try {
-			const formData = new FormData();
+			const upload = await uploadWithConflictChoice(file, folder, token);
 
-			formData.append('folder', folder);
-			formData.append('file', file);
-
-			const response = await fetch('/api/upload', {
-				method: 'POST',
-				headers: {
-					Authorization: `Bearer ${token}`,
-				},
-				body: formData,
-			});
-
-			const result = await response.json();
-
-			if (!response.ok || !result.success) {
-				throw new Error(result.message || '上传失败');
+			if (upload.cancelled) {
+				failures.push(`${file.name}: 已取消上传`);
+				continue;
 			}
 
-			results.push(result);
+			results.push(upload.result);
 		} catch (error) {
 			failures.push(`${file.name}: ${error instanceof Error ? error.message : '上传失败'}`);
 		}

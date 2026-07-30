@@ -282,6 +282,16 @@ select:focus {
 	word-break: break-all;
 }
 
+.result-note {
+	margin-bottom: 10px;
+	color: #067647;
+	font-size: 13px;
+}
+
+.result-note.warning {
+	color: #b54708;
+}
+
 .result-actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -739,6 +749,26 @@ select:focus {
 	border-radius: 50%;
 }
 
+.conflict-icon {
+	display: grid;
+	width: 44px;
+	height: 44px;
+	place-items: center;
+	color: #175cd3;
+	background: #eff8ff;
+	border-radius: 50%;
+}
+
+.conflict-icon svg {
+	width: 22px;
+	height: 22px;
+	fill: none;
+	stroke: currentColor;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 1.8;
+}
+
 .delete-dialog h2 {
 	margin: 18px 0 8px;
 	font-size: 20px;
@@ -763,11 +793,67 @@ select:focus {
 	white-space: nowrap;
 }
 
+.conflict-file {
+	margin-top: 16px;
+	padding: 11px 12px;
+	background: #f8fafc;
+	border: 1px solid #e4e7ec;
+	border-radius: 8px;
+}
+
+.conflict-file code {
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	border: 0;
+}
+
+.conflict-file span {
+	display: block;
+	margin-top: 6px;
+	color: #98a2b3;
+	font-size: 12px;
+}
+
+.rename-preview {
+	margin-top: 12px;
+	padding: 11px 12px;
+	color: #344054;
+	background: #eff8ff;
+	border: 1px solid #b2ddff;
+	border-radius: 8px;
+	font-size: 13px;
+}
+
+.rename-preview span,
+.rename-preview strong {
+	display: block;
+}
+
+.rename-preview strong {
+	margin-top: 5px;
+	overflow: hidden;
+	color: #175cd3;
+	font-family:
+		ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Monaco,
+		Consolas,
+		monospace;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .dialog-actions {
 	display: grid;
 	margin-top: 22px;
 	grid-template-columns: 1fr 1fr;
 	gap: 10px;
+}
+
+.conflict-actions {
+	grid-template-columns: 1fr 1fr 1.15fr;
 }
 
 .dialog-button {
@@ -788,6 +874,25 @@ select:focus {
 
 .dialog-button.danger:hover {
 	background: #b42318;
+}
+
+.dialog-button.overwrite {
+	color: #b42318;
+	border-color: #fda29b;
+}
+
+.dialog-button.overwrite:hover {
+	background: #fef3f2;
+}
+
+.dialog-button.primary-choice {
+	color: #fff;
+	background: #2563eb;
+	border-color: #2563eb;
+}
+
+.dialog-button.primary-choice:hover {
+	background: #1d4ed8;
 }
 
 .dialog-button:disabled {
@@ -884,5 +989,14 @@ select:focus {
 
 	.file-action {
 		flex: 1 1 auto;
+	}
+
+	.conflict-actions {
+		grid-template-columns: 1fr 1fr;
+	}
+
+	.conflict-actions .primary-choice {
+		grid-column: 1 / -1;
+		grid-row: 1;
 	}
 }
