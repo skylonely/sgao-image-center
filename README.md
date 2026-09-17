@@ -66,7 +66,7 @@ npm run dev
 
 上线前，在现有 Zero Trust 团队内创建一个路径级 self-hosted Access 应用，使用同一个应用保护 `img.sgao.cc/admin`、`img.sgao.cc/admin/*`、`img.sgao.cc/api/*`，Allow 策略仅包含上述邮箱。不要保护整个域名或整个 Worker，否则会阻断公开图片。浏览器访问 `/api/login` 后返回固定管理页面；已有团队登录会话可以复用，但首次进入图片应用仍需由 Access 完成应用会话跳转。
 
-配置 `ACCESS_TEAM_DOMAIN`（`https://你的团队.cloudflareaccess.com`）和 `ACCESS_AUD`（该图片应用的 AUD）。当前空配置会拒绝所有管理请求，不能直接发布为空；确认部署前须填入真实值。Worker 验证 Access JWT 的 RS256 签名、issuer、audience、有效期及账号身份，拒绝跨站或缺少 Origin 的写入，不信任请求中自行声明的邮箱。静态资源路由不会传递 `ctx.access`，因此图片 Worker 使用 `jose` 验证签名，而不是沿用 API 的上下文读取方式。参见 [Cloudflare 官方说明](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)。
+配置 `ACCESS_TEAM_DOMAIN`（`https://你的团队.cloudflareaccess.com`）和 `ACCESS_AUD`（该图片应用的 AUD）。当前配置使用 `https://gsios602.cloudflareaccess.com` 及图片应用 `img` 的 AUD；配置为空时会拒绝所有管理请求，不应发布空配置。Worker 验证 Access JWT 的 RS256 签名、issuer、audience、有效期及账号身份，拒绝跨站或缺少 Origin 的写入，不信任请求中自行声明的邮箱。静态资源路由不会传递 `ctx.access`，因此图片 Worker 使用 `jose` 验证签名，而不是沿用 API 的上下文读取方式。参见 [Cloudflare 官方说明](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)。
 
 保持 R2 绑定不变，无数据库迁移，不删除线上旧密钥（旧版回滚仍可使用）。`workers.dev` 或其他未经过图片 Access 应用的管理请求也会因缺少有效凭证被拒绝。配置变化后执行 `npx wrangler types --strict-vars=false`。本地验证：`npx vitest run`、`npm run test:auth-ui`、`npx tsc --noEmit`、`npx tsc --noEmit -p test/tsconfig.json`。生产账号登录仍需配置和发布后人工验证。
 

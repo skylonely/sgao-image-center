@@ -26,7 +26,7 @@
     }
   ],
   "vars": {
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ACCESS_TEAM_DOMAIN": "https://gsios602.cloudflareaccess.com",
+    "ACCESS_AUD": "81440833e7605ae216c6d12570087b8d05113e9e0db1380cc4c3da04ea11f1c6"
   }
 }
