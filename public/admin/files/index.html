@@ -24,15 +24,9 @@
 				</button>
 			</header>
 
-			<section id="authPanel" class="panel auth-panel">
-				<div class="field compact-field">
-					<label for="filesToken">管理密钥</label>
-					<div class="input-action">
-						<input id="filesToken" type="password" placeholder="请输入 UPLOAD_TOKEN" autocomplete="off" />
-						<button id="loadButton" class="primary-button inline-button" type="button">查看文件</button>
-					</div>
-					<p class="help-text">与上传页共用当前标签页中的密钥，关闭标签页后自动清除。</p>
-				</div>
+			<section id="authPanel" class="panel account-panel">
+				<div><strong>图片管理账号</strong><p id="accountStatus" class="help-text" role="status">正在检查登录…</p></div>
+				<div class="account-actions"><a id="loginLink" href="/api/login?returnTo=/admin/files/" hidden>登录账号</a><a id="logoutLink" href="/cdn-cgi/access/logout" hidden>退出登录</a><button id="checkAccountButton" type="button">重新检查</button></div>
 			</section>
 
 			<section id="manager" class="files-manager" hidden>
@@ -145,6 +139,7 @@
 
 		<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+		<script src="/admin/auth.js"></script>
 		<script src="/admin/files/files.js"></script>
 	</body>
 </html>

@@ -411,6 +411,13 @@ select:focus {
 		padding 0.2s ease,
 		opacity 0.2s ease;
 }
+.account-panel { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.account-panel strong { font-size: 16px; }
+.account-panel .help-text { margin-bottom: 0; overflow-wrap: anywhere; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; flex-shrink: 0; }
+.account-actions a, .account-actions button { padding: 10px 12px; min-height: 44px; border: 1px solid #d8dee8; border-radius: 10px; background: #fff; color: #2563eb; text-decoration: none; cursor: pointer; font-size: 14px; }
+.account-actions [hidden], [data-owner-only][hidden] { display: none; }
+@media (max-width: 600px) { .account-panel { align-items: flex-start; flex-direction: column; } }
 
 .auth-panel.authenticated {
 	padding-top: 18px;

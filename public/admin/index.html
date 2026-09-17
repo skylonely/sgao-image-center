@@ -18,18 +18,17 @@
 				<a class="header-link" href="/admin/files/">管理文件 →</a>
 			</header>
 
-			<section class="panel">
-				<div class="field">
-					<label for="token">上传密钥</label>
-					<input id="token" type="password" placeholder="请输入 UPLOAD_TOKEN" autocomplete="off" />
-					<p class="help-text">密钥仅保存在当前浏览器标签页，关闭标签页后清除。</p>
-				</div>
+			<section class="panel account-panel">
+				<div><strong>图片管理账号</strong><p id="accountStatus" class="help-text" role="status">正在检查登录…</p></div>
+				<div class="account-actions"><a id="loginLink" href="/api/login?returnTo=/admin/" hidden>登录账号</a><a id="logoutLink" href="/cdn-cgi/access/logout" hidden>退出登录</a><button id="checkAccountButton" type="button">重新检查</button></div>
+			</section>
+			<section class="panel" data-owner-only hidden>
 
 				<div class="field">
 					<label for="folder">保存目录</label>
 					<input id="folder" type="text" list="folderSuggestions" value="common" placeholder="例如：common 或 docs/guides" autocomplete="off" />
 					<datalist id="folderSuggestions"></datalist>
-					<p id="directoryStatus" class="help-text">输入上传密钥后，将自动读取 R2 中的实际目录。</p>
+					<p id="directoryStatus" class="help-text">登录后自动读取 R2 中的实际目录。</p>
 					<p class="help-text">也可输入新目录；多级目录使用 “/”，例如 docs/guides。</p>
 				</div>
 
@@ -79,6 +78,7 @@
 			</div>
 		</div>
 
+		<script src="/admin/auth.js"></script>
 		<script src="/admin/app.js"></script>
 	</body>
 </html>

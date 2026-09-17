@@ -1,3 +1,5 @@
+import { authorizeImageRequest } from '../auth';
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_RENAME_ATTEMPTS = 100;
 const IMAGE_ORIGIN = 'https://img.sgao.cc';
@@ -54,12 +56,6 @@ function filenameExtension(filename: string): string {
 	const extensionIndex = filename.lastIndexOf('.');
 
 	return extensionIndex > 0 ? filename.slice(extensionIndex + 1).toLowerCase() : '';
-}
-
-function isAuthorized(request: Request, env: Env): boolean {
-	const authorization = request.headers.get('Authorization');
-
-	return authorization === `Bearer ${env.UPLOAD_TOKEN}`;
 }
 
 function startsWithBytes(bytes: Uint8Array, signature: readonly number[], offset = 0): boolean {
@@ -222,15 +218,8 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 		);
 	}
 
-	if (!isAuthorized(request, env)) {
-		return jsonResponse(
-			{
-				success: false,
-				message: 'Unauthorized',
-			},
-			401,
-		);
-	}
+	const identity = await authorizeImageRequest(request, env);
+	if (identity instanceof Response) return identity;
 
 	const contentType = request.headers.get('Content-Type') ?? '';
 

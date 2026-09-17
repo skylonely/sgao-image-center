@@ -1,4 +1,3 @@
-const tokenInput = document.querySelector('#token');
 const folderInput = document.querySelector('#folder');
 const folderSuggestions = document.querySelector('#folderSuggestions');
 const directoryStatus = document.querySelector('#directoryStatus');
@@ -17,7 +16,6 @@ const renameButton = document.querySelector('#renameButton');
 
 let selectedFiles = [];
 let conflictResolver = null;
-let directoryLoadTimer = null;
 let directoryRequestId = 0;
 let directorySuggestions = new Set();
 
@@ -30,21 +28,14 @@ const ALLOWED_FILE_TYPES = new Map([
 	['image/svg+xml', new Set(['svg'])],
 ]);
 
-tokenInput.value = sessionStorage.getItem('sgaoUploadToken') || '';
-
 folderInput.value = localStorage.getItem('sgaoUploadFolder') || 'common';
-
-tokenInput.addEventListener('input', () => {
-	sessionStorage.setItem('sgaoUploadToken', tokenInput.value.trim());
-	scheduleDirectoryLoad();
-});
 
 folderInput.addEventListener('input', () => {
 	localStorage.setItem('sgaoUploadFolder', folderInput.value.trim());
 });
 
 folderInput.addEventListener('focus', () => {
-	if (tokenInput.value.trim() && !directorySuggestions.size) {
+	if (window.imageAccount.authorized && !directorySuggestions.size) {
 		loadDirectorySuggestions();
 	}
 });
@@ -70,19 +61,13 @@ function addDirectorySuggestion(directory) {
 	renderDirectorySuggestions();
 }
 
-function scheduleDirectoryLoad() {
-	window.clearTimeout(directoryLoadTimer);
-	directoryLoadTimer = window.setTimeout(loadDirectorySuggestions, 450);
-}
-
 async function loadDirectorySuggestions() {
-	const token = tokenInput.value.trim();
 	const requestId = ++directoryRequestId;
 
-	if (!token) {
+	if (!window.imageAccount.authorized) {
 		directorySuggestions.clear();
 		renderDirectorySuggestions();
-		directoryStatus.textContent = '输入上传密钥后，将自动读取 R2 中的实际目录。';
+		directoryStatus.textContent = '登录后自动读取 R2 中的实际目录。';
 		return;
 	}
 
@@ -99,15 +84,11 @@ async function loadDirectorySuggestions() {
 				query.set('cursor', cursor);
 			}
 
-			const response = await fetch(`/api/files?${query}`, {
-				headers: {
-					Authorization: `Bearer ${token}`,
-				},
-			});
+			const response = await window.imageAccount.request(`/api/files?${query}`);
 			const result = await response.json();
 
 			if (!response.ok || !result.success) {
-				throw new Error(response.status === 401 ? '密钥验证失败，暂时无法读取 R2 目录。' : result.message || '目录读取失败。');
+				throw new Error(result.message || '目录读取失败。');
 			}
 
 			for (const directory of result.directories) {
@@ -394,7 +375,7 @@ document.addEventListener('keydown', (event) => {
 	}
 });
 
-async function sendUpload(file, folder, token, conflict = 'reject', expectedEtag = '') {
+async function sendUpload(file, folder, conflict = 'reject', expectedEtag = '') {
 	const formData = new FormData();
 
 	formData.append('folder', folder);
@@ -405,11 +386,8 @@ async function sendUpload(file, folder, token, conflict = 'reject', expectedEtag
 		formData.append('expectedEtag', expectedEtag);
 	}
 
-	const response = await fetch('/api/upload', {
+	const response = await window.imageAccount.request('/api/upload', {
 		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${token}`,
-		},
 		body: formData,
 	});
 
@@ -426,8 +404,8 @@ async function sendUpload(file, folder, token, conflict = 'reject', expectedEtag
 	return { result };
 }
 
-async function uploadWithConflictChoice(file, folder, token) {
-	let attempt = await sendUpload(file, folder, token);
+async function uploadWithConflictChoice(file, folder) {
+	let attempt = await sendUpload(file, folder);
 
 	while (attempt.conflict) {
 		const choice = await chooseConflict(attempt.conflict);
@@ -439,7 +417,6 @@ async function uploadWithConflictChoice(file, folder, token) {
 		attempt = await sendUpload(
 			file,
 			folder,
-			token,
 			choice,
 			choice === 'overwrite' ? attempt.conflict.etag : '',
 		);
@@ -449,11 +426,10 @@ async function uploadWithConflictChoice(file, folder, token) {
 }
 
 uploadButton.addEventListener('click', async () => {
-	const token = tokenInput.value.trim();
 	const folder = normalizeFolder(folderInput.value);
 
-	if (!token) {
-		showError('请输入上传密钥。');
+	if (!window.imageAccount.authorized) {
+		showError('请先登录图片管理账号。');
 		return;
 	}
 
@@ -481,8 +457,9 @@ uploadButton.addEventListener('click', async () => {
 	const failures = [];
 
 	for (const file of selectedFiles) {
+		if (!window.imageAccount.authorized) break;
 		try {
-			const upload = await uploadWithConflictChoice(file, folder, token);
+			const upload = await uploadWithConflictChoice(file, folder);
 
 			if (upload.cancelled) {
 				failures.push(`${file.name}: 已取消上传`);
@@ -495,7 +472,7 @@ uploadButton.addEventListener('click', async () => {
 		}
 	}
 
-	showResults(results, failures);
+	if (window.imageAccount.authorized) showResults(results, failures);
 
 	if (results.length) {
 		addDirectorySuggestion(folder);
@@ -512,6 +489,10 @@ uploadButton.addEventListener('click', async () => {
 	}
 });
 
-if (tokenInput.value.trim()) {
-	loadDirectorySuggestions();
-}
+window.addEventListener('image-auth-changed', (event) => {
+	if (event.detail.authorized) loadDirectorySuggestions();
+	else {
+		directoryRequestId += 1; directorySuggestions.clear(); renderDirectorySuggestions(); resolveConflict('cancel');
+		selectedFiles = []; fileInput.value = ''; fileList.replaceChildren(); statusBox.replaceChildren();
+	}
+});

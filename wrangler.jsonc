@@ -25,9 +25,8 @@
       "bucket_name": "sgao-images"
     }
   ],
-  "secrets": {
-    "required": [
-      "UPLOAD_TOKEN"
-    ]
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
   }
 }

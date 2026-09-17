@@ -1,7 +1,4 @@
-const tokenInput = document.querySelector('#filesToken');
-const loadButton = document.querySelector('#loadButton');
 const refreshButton = document.querySelector('#refreshButton');
-const authPanel = document.querySelector('#authPanel');
 const manager = document.querySelector('#manager');
 const searchInput = document.querySelector('#searchInput');
 const fileCount = document.querySelector('#fileCount');
@@ -49,19 +46,6 @@ let lastPreviewTrigger = null;
 const MAX_BATCH_DELETE = 50;
 const collapsedFolders = new Set(readCollapsedFolders());
 
-tokenInput.value = sessionStorage.getItem('sgaoUploadToken') || '';
-
-tokenInput.addEventListener('input', () => {
-	sessionStorage.setItem('sgaoUploadToken', tokenInput.value.trim());
-});
-
-tokenInput.addEventListener('keydown', (event) => {
-	if (event.key === 'Enter') {
-		loadFiles({ reset: true });
-	}
-});
-
-loadButton.addEventListener('click', () => loadFiles({ reset: true }));
 refreshButton.addEventListener('click', () => loadFiles({ reset: true }));
 loadMoreButton.addEventListener('click', () => loadFiles({ reset: false }));
 searchInput.addEventListener('input', renderFiles);
@@ -129,18 +113,8 @@ previewImage.addEventListener('error', () => {
 	previewError.hidden = false;
 });
 
-function getToken() {
-	return tokenInput.value.trim();
-}
-
 async function requestFiles(url, options = {}) {
-	const response = await fetch(url, {
-		...options,
-		headers: {
-			...options.headers,
-			Authorization: `Bearer ${getToken()}`,
-		},
-	});
+	const response = await window.imageAccount.request(url, options);
 
 	let result;
 
@@ -149,6 +123,7 @@ async function requestFiles(url, options = {}) {
 	} catch {
 		throw new Error('服务器返回了无法解析的响应');
 	}
+	if (!window.imageAccount.authorized) throw new Error('登录状态已变化，请重新登录。');
 
 	if (!response.ok || !result.success) {
 		const error = new Error(result.message || '请求失败');
@@ -160,11 +135,7 @@ async function requestFiles(url, options = {}) {
 }
 
 async function loadFiles({ reset }) {
-	if (!getToken()) {
-		showManagerError('请输入管理密钥。');
-		tokenInput.focus();
-		return;
-	}
+	if (!window.imageAccount.authorized) return;
 
 	setLoading(true, reset ? '正在读取文件…' : '正在加载更多…');
 
@@ -180,8 +151,6 @@ async function loadFiles({ reset }) {
 		files = reset ? result.files : [...files, ...result.files];
 		cursor = result.cursor;
 
-		sessionStorage.setItem('sgaoUploadToken', getToken());
-		authPanel.classList.add('authenticated');
 		manager.hidden = false;
 		managerStatus.textContent = '';
 		managerStatus.className = 'manager-status';
@@ -189,23 +158,15 @@ async function loadFiles({ reset }) {
 
 		renderFiles();
 	} catch (error) {
-		if (error.status === 401) {
-			showManagerError('密钥不正确，请重新输入。');
-			tokenInput.focus();
-			tokenInput.select();
-		} else {
-			showManagerError(error.message || '文件读取失败，请稍后重试。');
-		}
+		if (window.imageAccount.authorized) showManagerError(error.message || '文件读取失败，请稍后重试。');
 	} finally {
 		setLoading(false);
 	}
 }
 
 function setLoading(loading, message = '') {
-	loadButton.disabled = loading;
 	refreshButton.disabled = loading;
 	loadMoreButton.disabled = loading;
-	loadButton.textContent = loading ? '读取中…' : '查看文件';
 
 	if (loading && manager.hidden === false) {
 		managerStatus.className = 'manager-status loading';
@@ -214,6 +175,7 @@ function setLoading(loading, message = '') {
 }
 
 function showManagerError(message) {
+	if (!window.imageAccount.authorized) return;
 	manager.hidden = false;
 	managerStatus.className = 'manager-status error';
 	managerStatus.textContent = message;
@@ -736,6 +698,11 @@ function showToast(message) {
 	toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 1800);
 }
 
-if (getToken()) {
-	loadFiles({ reset: true });
-}
+window.addEventListener('image-auth-changed', (event) => {
+	if (event.detail.authorized) loadFiles({ reset: true });
+	else {
+		files = []; cursor = null; selectedKeys.clear(); folderList.replaceChildren();
+		manager.hidden = true; selectionBar.hidden = true;
+		closeImagePreview(); closeRenameDialog(); closeDeleteDialog();
+	}
+});

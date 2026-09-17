@@ -1,5 +1,6 @@
 import { env, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ownerFetch } from './auth-fixture';
 
 const testKeys = ['common/admin-files-test.png', 'docs/second-test.png'];
 const uploadTestPrefix = 'conflict-tests/';
@@ -30,9 +31,8 @@ async function uploadTestImage(
 		formData.append('expectedEtag', options.expectedEtag);
 	}
 
-	return SELF.fetch('https://example.com/api/upload', {
+	return ownerFetch('https://example.com/api/upload', {
 		method: 'POST',
-		headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` },
 		body: formData,
 	});
 }
@@ -59,10 +59,10 @@ describe('image center worker', () => {
 		const response = await SELF.fetch('https://example.com/api/files');
 
 		expect(response.status).toBe(401);
-		expect(response.headers.get('WWW-Authenticate')).toBe('Bearer');
+		expect(response.headers.get('Cache-Control')).toContain('no-store');
 		expect(await response.json()).toMatchObject({
 			success: false,
-			message: 'Unauthorized',
+			code: 'AUTH_REQUIRED',
 		});
 	});
 
@@ -73,8 +73,8 @@ describe('image center worker', () => {
 		});
 		await env.IMAGES.put(testKeys[1], new Uint8Array([4, 5]));
 
-		const authorization = { Authorization: `Bearer ${env.UPLOAD_TOKEN}` };
-		const listResponse = await SELF.fetch('https://example.com/api/files?prefix=common/', {
+		const authorization = {};
+		const listResponse = await ownerFetch('https://example.com/api/files?prefix=common/', {
 			headers: authorization,
 		});
 		const listResult = await listResponse.json<{
@@ -101,7 +101,7 @@ describe('image center worker', () => {
 		);
 		expect(listResult.files.some((file) => file.key === testKeys[1])).toBe(false);
 
-		const deleteResponse = await SELF.fetch(`https://example.com/api/files?key=${encodeURIComponent(testKeys[0])}`, {
+		const deleteResponse = await ownerFetch(`https://example.com/api/files?key=${encodeURIComponent(testKeys[0])}`, {
 			method: 'DELETE',
 			headers: authorization,
 		});
@@ -111,9 +111,8 @@ describe('image center worker', () => {
 	});
 
 	it('returns 404 when deleting a missing file', async () => {
-		const response = await SELF.fetch('https://example.com/api/files?key=common%2Fmissing.png', {
+		const response = await ownerFetch('https://example.com/api/files?key=common%2Fmissing.png', {
 			method: 'DELETE',
-			headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` },
 		});
 
 		expect(response.status).toBe(404);
@@ -243,9 +242,8 @@ describe('image center worker', () => {
 		formData.append('folder', uploadTestPrefix.slice(0, -1));
 		formData.append('file', new File([oversized], 'large.png', { type: 'image/png' }));
 
-		const response = await SELF.fetch('https://example.com/api/upload', {
+		const response = await ownerFetch('https://example.com/api/upload', {
 			method: 'POST',
-			headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` },
 			body: formData,
 		});
 
@@ -285,9 +283,7 @@ describe('image center worker', () => {
 		});
 		expect(await env.IMAGES.head(result.key)).not.toBeNull();
 
-		const directoriesResponse = await SELF.fetch('https://example.com/api/files?view=directories', {
-			headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` },
-		});
+		const directoriesResponse = await ownerFetch('https://example.com/api/files?view=directories');
 		const directories = await directoriesResponse.json<{ success: boolean; directories: string[] }>();
 
 		expect(directoriesResponse.status).toBe(200);
@@ -311,10 +307,9 @@ describe('image center worker', () => {
 		});
 
 		const source = await env.IMAGES.head(sourceKey);
-		const response = await SELF.fetch('https://example.com/api/files', {
+		const response = await ownerFetch('https://example.com/api/files', {
 			method: 'PATCH',
 			headers: {
-				Authorization: `Bearer ${env.UPLOAD_TOKEN}`,
 				'Content-Type': 'application/json',
 			},
 			body: JSON.stringify({
@@ -336,14 +331,13 @@ describe('image center worker', () => {
 		const renamed = await env.IMAGES.get(targetKey);
 
 		expect([...new Uint8Array(await renamed!.arrayBuffer())]).toEqual([...pngSignature, 7]);
-		expect(renamed!.httpMetadata.contentType).toBe('image/png');
+		expect(renamed!.httpMetadata?.contentType).toBe('image/png');
 
 		await env.IMAGES.put(sourceKey, new Uint8Array([1]));
 
-		const conflictResponse = await SELF.fetch('https://example.com/api/files', {
+		const conflictResponse = await ownerFetch('https://example.com/api/files', {
 			method: 'PATCH',
 			headers: {
-				Authorization: `Bearer ${env.UPLOAD_TOKEN}`,
 				'Content-Type': 'application/json',
 			},
 			body: JSON.stringify({
@@ -361,10 +355,9 @@ describe('image center worker', () => {
 
 		await Promise.all(keys.map((key, index) => env.IMAGES.put(key, new Uint8Array([index]))));
 
-		const response = await SELF.fetch('https://example.com/api/files', {
+		const response = await ownerFetch('https://example.com/api/files', {
 			method: 'DELETE',
 			headers: {
-				Authorization: `Bearer ${env.UPLOAD_TOKEN}`,
 				'Content-Type': 'application/json',
 			},
 			body: JSON.stringify({ keys }),

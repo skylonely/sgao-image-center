@@ -1,3 +1,5 @@
+import { authorizeImageRequest } from '../auth';
+
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
 const MAX_KEY_LENGTH = 1024;
@@ -11,12 +13,6 @@ function jsonResponse(data: unknown, status = 200, extraHeaders?: HeadersInit): 
 	headers.set('X-Content-Type-Options', 'nosniff');
 
 	return Response.json(data, { status, headers });
-}
-
-function isAuthorized(request: Request, env: Env): boolean {
-	const authorization = request.headers.get('Authorization');
-
-	return Boolean(env.UPLOAD_TOKEN) && authorization === `Bearer ${env.UPLOAD_TOKEN}`;
 }
 
 function imageUrlForKey(key: string): string {
@@ -379,13 +375,8 @@ async function renameFile(request: Request, env: Env): Promise<Response> {
 }
 
 export async function handleFiles(request: Request, env: Env): Promise<Response> {
-	if (!isAuthorized(request, env)) {
-		return jsonResponse(
-			{ success: false, message: 'Unauthorized' },
-			401,
-			{ 'WWW-Authenticate': 'Bearer' },
-		);
-	}
+	const identity = await authorizeImageRequest(request, env);
+	if (identity instanceof Response) return identity;
 
 		switch (request.method) {
 			case 'GET': {
