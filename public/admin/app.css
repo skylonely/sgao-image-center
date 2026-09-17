@@ -1431,3 +1431,11 @@ select:focus {
 		grid-row: 1;
 	}
 }
+.recycle-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.recycle-tabs button { min-height: 44px; padding: 10px 20px; border: 1px solid #d7deea; border-radius: 12px; background: #fff; color: #526079; cursor: pointer; font: inherit; }
+.recycle-tabs button[aria-pressed="true"] { color: #245bcd; border-color: #b6cbf7; background: #edf4ff; }
+.recycle-tabs button:focus-visible { outline: 3px solid #8db4ff; outline-offset: 2px; }
+.file-row.recycle-row { grid-template-columns: 64px minmax(0, 1fr) auto; }
+.recycle-thumbnail { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; background: #f3f5f9; }
+.recycle-row .file-meta { overflow-wrap: anywhere; }
+@media (max-width: 700px) { .file-row.recycle-row { grid-template-columns: 56px minmax(0, 1fr); } .recycle-row .file-actions { grid-column: 1 / -1; } }

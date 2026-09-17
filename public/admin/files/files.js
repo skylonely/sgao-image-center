@@ -1,4 +1,7 @@
 const refreshButton = document.querySelector('#refreshButton');
+const activeFilesButton = document.querySelector('#activeFilesButton');
+const trashFilesButton = document.querySelector('#trashFilesButton');
+const trashNotice = document.querySelector('#trashNotice');
 const manager = document.querySelector('#manager');
 const searchInput = document.querySelector('#searchInput');
 const fileCount = document.querySelector('#fileCount');
@@ -42,6 +45,28 @@ let pendingRenameFile = null;
 let toastTimer = null;
 let previewIndex = -1;
 let lastPreviewTrigger = null;
+let trashMode = false;
+let loadGeneration = 0;
+let pendingPurgeFile = null;
+let operationBusy = false;
+
+activeFilesButton.addEventListener('click', () => switchView(false));
+trashFilesButton.addEventListener('click', () => switchView(true));
+
+function switchView(nextTrashMode) {
+	if (operationBusy || !window.imageAccount.authorized) return;
+	trashMode = nextTrashMode;
+	loadGeneration += 1;
+	files = []; cursor = null; selectedKeys.clear();
+	closeImagePreview(); closeDeleteDialog(); closeRenameDialog();
+	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
+	trashFilesButton.setAttribute('aria-pressed', String(trashMode));
+	trashNotice.hidden = !trashMode;
+	selectVisibleButton.hidden = trashMode;
+	searchInput.value = '';
+	renderFiles();
+	loadFiles({ reset: true });
+}
 
 const MAX_BATCH_DELETE = 50;
 const collapsedFolders = new Set(readCollapsedFolders());
@@ -136,6 +161,8 @@ async function requestFiles(url, options = {}) {
 
 async function loadFiles({ reset }) {
 	if (!window.imageAccount.authorized) return;
+	const generation = ++loadGeneration;
+	const requestedTrashMode = trashMode;
 
 	setLoading(true, reset ? '正在读取文件…' : '正在加载更多…');
 
@@ -146,7 +173,8 @@ async function loadFiles({ reset }) {
 			query.set('cursor', cursor);
 		}
 
-		const result = await requestFiles(`/api/files?${query}`);
+		const result = await requestFiles(`${requestedTrashMode ? '/api/trash' : '/api/files'}?${query}`);
+		if (generation !== loadGeneration || !window.imageAccount.authorized) return;
 
 		files = reset ? result.files : [...files, ...result.files];
 		cursor = result.cursor;
@@ -158,9 +186,9 @@ async function loadFiles({ reset }) {
 
 		renderFiles();
 	} catch (error) {
-		if (window.imageAccount.authorized) showManagerError(error.message || '文件读取失败，请稍后重试。');
+		if (generation === loadGeneration && window.imageAccount.authorized) showManagerError(error.message || '文件读取失败，请稍后重试。');
 	} finally {
-		setLoading(false);
+		if (generation === loadGeneration) setLoading(false);
 	}
 }
 
@@ -230,8 +258,8 @@ function renderFiles() {
 		empty.className = 'empty-state';
 		empty.innerHTML = `
 			<div class="empty-icon" aria-hidden="true">⌁</div>
-			<strong>${query ? '没有匹配的文件' : '还没有图片'}</strong>
-			<span>${query ? '换个关键词试试。' : '从上传页添加第一张图片吧。'}</span>
+			<strong>${query ? '没有匹配的文件' : cursor ? '当前页没有可见图片' : trashMode ? '回收站是空的' : '还没有图片'}</strong>
+			<span>${query ? '换个关键词试试，也可加载更多后搜索。' : cursor ? '点击加载更多，继续读取后面的图片。' : trashMode ? '移入回收站的图片会出现在这里。' : '从上传页添加第一张图片吧。'}</span>
 		`;
 
 		folderList.append(empty);
@@ -305,6 +333,7 @@ function renderFiles() {
 }
 
 function createFileRow(file) {
+	if (trashMode) return createTrashRow(file);
 	const row = document.createElement('article');
 	const selectLabel = document.createElement('label');
 	const checkbox = document.createElement('input');
@@ -387,7 +416,7 @@ function updateSelectionUI() {
 	const allVisibleSelected = renderedFiles.length > 0 && selectedVisibleCount === renderedFiles.length;
 	const selectionAtLimit = selectedVisibleCount > 0 && selectedKeys.size >= MAX_BATCH_DELETE;
 
-	selectionBar.hidden = selectedKeys.size === 0;
+	selectionBar.hidden = trashMode || selectedKeys.size === 0;
 	selectedCount.textContent = `已选择 ${selectedKeys.size} 个文件`;
 	batchDeleteButton.textContent = `删除所选（${selectedKeys.size}）`;
 	selectVisibleButton.textContent =
@@ -626,6 +655,7 @@ async function copyText(value, successMessage) {
 }
 
 function openDeleteDialog(value) {
+	if (operationBusy) return;
 	const keys = Array.isArray(value) ? value : [value];
 
 	if (!keys.length) {
@@ -633,8 +663,10 @@ function openDeleteDialog(value) {
 	}
 
 	pendingDeleteKeys = keys.slice(0, MAX_BATCH_DELETE);
-	deleteTitle.textContent = pendingDeleteKeys.length === 1 ? '删除这张图片？' : `删除 ${pendingDeleteKeys.length} 张图片？`;
-	deleteDescription.textContent = pendingDeleteKeys.length === 1 ? '此操作无法撤销。' : '批量删除无法撤销，请确认所选文件。';
+	pendingPurgeFile = null;
+	confirmDeleteButton.textContent = '移入回收站';
+	deleteTitle.textContent = pendingDeleteKeys.length === 1 ? '移入回收站？' : `将 ${pendingDeleteKeys.length} 张图片移入回收站？`;
+	deleteDescription.textContent = '可以在回收站恢复。引用这些图片的网页会暂时无法显示图片；浏览器已缓存的副本可能仍可见。';
 	deleteKey.textContent =
 		pendingDeleteKeys.length === 1
 			? pendingDeleteKeys[0]
@@ -645,49 +677,62 @@ function openDeleteDialog(value) {
 }
 
 function closeDeleteDialog() {
+	if (operationBusy) return;
+	pendingPurgeFile = null;
 	pendingDeleteKeys = [];
 	deleteDialog.hidden = true;
 	document.body.classList.remove('modal-open');
 }
 
 async function deleteFile() {
+	if (operationBusy) return;
+	if (pendingPurgeFile) return permanentlyDeleteFile();
 	if (!pendingDeleteKeys.length) {
 		return;
 	}
 
 	const keys = [...pendingDeleteKeys];
+	operationBusy = true;
 
 	confirmDeleteButton.disabled = true;
-	confirmDeleteButton.textContent = '删除中…';
+	confirmDeleteButton.textContent = '移入中…';
 
 	try {
+		let deleted = keys;
+		let failed = [];
 		if (keys.length === 1) {
 			await requestFiles(`/api/files?key=${encodeURIComponent(keys[0])}`, { method: 'DELETE' });
 		} else {
-			await requestFiles('/api/files', {
+			const result = await requestFiles('/api/files', {
 				method: 'DELETE',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ keys }),
 			});
+			deleted = result.deletedKeys;
+			failed = result.failed || [];
 		}
 
-		const deletedKeys = new Set(keys);
+		const deletedKeys = new Set(deleted);
 
 		files = files.filter((file) => !deletedKeys.has(file.key));
 
-		for (const key of keys) {
+		for (const key of deleted) {
 			selectedKeys.delete(key);
 		}
 
+		operationBusy = false;
 		closeDeleteDialog();
 		renderFiles();
-		showToast(keys.length === 1 ? '图片已删除' : `已删除 ${keys.length} 张图片`);
+		showToast(`已移入回收站 ${deleted.length} 张图片`);
+		if (failed.length) showManagerError(`${failed.length} 张未移入：${failed.map((entry) => entry.message).join('；')}`);
 	} catch (error) {
+		operationBusy = false;
 		closeDeleteDialog();
 		showManagerError(error.message || '删除失败，请稍后重试。');
 	} finally {
+		operationBusy = false;
 		confirmDeleteButton.disabled = false;
-		confirmDeleteButton.textContent = '确认删除';
+		confirmDeleteButton.textContent = '移入回收站';
 	}
 }
 
@@ -701,8 +746,60 @@ function showToast(message) {
 window.addEventListener('image-auth-changed', (event) => {
 	if (event.detail.authorized) loadFiles({ reset: true });
 	else {
+		loadGeneration += 1;
+		operationBusy = false;
 		files = []; cursor = null; selectedKeys.clear(); folderList.replaceChildren();
 		manager.hidden = true; selectionBar.hidden = true;
 		closeImagePreview(); closeRenameDialog(); closeDeleteDialog();
 	}
 });
+
+function createTrashRow(file) {
+	const row = document.createElement('article');
+	row.className = 'file-row recycle-row';
+	const image = document.createElement('img');
+	image.className = 'recycle-thumbnail'; image.src = file.url; image.alt = ''; image.loading = 'lazy';
+	image.addEventListener('error', () => { image.hidden = true; });
+	const details = document.createElement('div'); details.className = 'file-details';
+	const name = document.createElement('strong'); name.className = 'managed-file-name'; name.textContent = file.filename;
+	const key = document.createElement('p'); key.className = 'file-meta'; key.textContent = file.key;
+	const meta = document.createElement('p'); meta.className = 'file-meta';
+	meta.textContent = `${formatSize(file.size)} · 删除于 ${formatDate(file.deletedAt)}`;
+	details.append(name, key, meta);
+	const actions = document.createElement('div'); actions.className = 'file-actions';
+	actions.append(createActionButton('恢复', 'rename', () => restoreFile(file)),
+		createActionButton('彻底删除', 'delete', () => openPurgeDialog(file)));
+	row.append(image, details, actions);
+	return row;
+}
+
+async function restoreFile(file) {
+	if (operationBusy) return;
+	operationBusy = true;
+	try {
+		const result = await requestFiles('/api/trash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: file.id }) });
+		showToast(result.cleanupPending ? '图片已恢复，回收站副本清理待重试' : '图片已恢复到原路径');
+		await loadFiles({ reset: true });
+	} catch (error) { showManagerError(error.message || '恢复失败，请刷新重试。'); }
+	finally { operationBusy = false; }
+}
+
+function openPurgeDialog(file) {
+	if (operationBusy) return;
+	pendingDeleteKeys = []; pendingPurgeFile = file;
+	deleteTitle.textContent = '彻底删除这张图片？';
+	deleteDescription.textContent = '将永久移除回收站中的图片副本，无法恢复。不会删除原路径后来上传的新图片。';
+	deleteKey.textContent = file.key; confirmDeleteButton.textContent = '确认彻底删除';
+	deleteDialog.hidden = false; document.body.classList.add('modal-open'); cancelDeleteButton.focus();
+}
+
+async function permanentlyDeleteFile() {
+	const file = pendingPurgeFile;
+	operationBusy = true; confirmDeleteButton.disabled = true; confirmDeleteButton.textContent = '彻底删除中…';
+	try {
+		await requestFiles('/api/trash', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: file.id, confirmation: 'DELETE' }) });
+		operationBusy = false; closeDeleteDialog();
+		showToast('已彻底删除，无法恢复'); await loadFiles({ reset: true });
+	} catch (error) { operationBusy = false; closeDeleteDialog(); showManagerError(error.message || '彻底删除失败，请刷新检查。'); }
+	finally { operationBusy = false; confirmDeleteButton.disabled = false; }
+}

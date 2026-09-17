@@ -1,4 +1,5 @@
 import { authorizeImageRequest } from '../auth';
+import { isDeletedImage } from '../trash';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_RENAME_ATTEMPTS = 100;
@@ -177,7 +178,8 @@ function objectMetadata(file: File): R2PutOptions {
 }
 
 async function putWithoutOverwrite(bucket: R2Bucket, key: string, file: File): Promise<R2Object | null> {
-	const conditions = new Headers({ 'If-None-Match': '*' });
+	const existing = await bucket.head(key);
+	const conditions = new Headers(isDeletedImage(existing) ? { 'If-Match': existing!.httpEtag } : { 'If-None-Match': '*' });
 
 	return bucket.put(key, file, {
 		...objectMetadata(file),
@@ -349,7 +351,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 		let overwritten = false;
 		const existing = await env.IMAGES.head(key);
 
-		if (conflict === 'reject' && existing) {
+		if (conflict === 'reject' && existing && !isDeletedImage(existing)) {
 			return fileExistsResponse(key, existing, filename);
 		}
 
@@ -370,7 +372,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			savedFilename = generated.filename;
 			renamed = true;
 		} else if (conflict === 'overwrite') {
-			if (!existing) {
+			if (!existing || isDeletedImage(existing)) {
 				const object = await putWithoutOverwrite(env.IMAGES, key, file);
 
 				if (!object) {

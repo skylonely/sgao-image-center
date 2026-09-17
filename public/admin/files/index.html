@@ -30,6 +30,11 @@
 			</section>
 
 			<section id="manager" class="files-manager" hidden>
+				<div class="recycle-tabs" role="group" aria-label="图片管理视图">
+					<button id="activeFilesButton" type="button" aria-pressed="true">图片文件</button>
+					<button id="trashFilesButton" type="button" aria-pressed="false">回收站</button>
+				</div>
+				<p id="trashNotice" class="help-text" hidden>回收站不会自动清空。恢复到原路径；同名新图片不会被覆盖。彻底删除后无法恢复。</p>
 				<div class="manager-toolbar">
 					<div class="search-box">
 						<svg aria-hidden="true" viewBox="0 0 24 24">
@@ -128,7 +133,7 @@
 					</svg>
 				</div>
 				<h2 id="deleteTitle">删除这张图片？</h2>
-				<p id="deleteDescription">此操作无法撤销。</p>
+				<p id="deleteDescription">移入回收站后可以恢复。</p>
 				<code id="deleteKey"></code>
 				<div class="dialog-actions">
 					<button id="cancelDeleteButton" class="dialog-button" type="button">取消</button>

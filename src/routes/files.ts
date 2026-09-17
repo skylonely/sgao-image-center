@@ -1,4 +1,5 @@
 import { authorizeImageRequest } from '../auth';
+import { isDeletedImage, isImageKey, isTrashKey, moveToTrash, TrashError } from '../trash';
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
@@ -24,12 +25,8 @@ function imageUrlForKey(key: string): string {
 	return `${IMAGE_ORIGIN}/${encodedKey}`;
 }
 
-function keyByteLength(key: string): number {
-	return new TextEncoder().encode(key).byteLength;
-}
-
 function isValidKey(key: string): boolean {
-	return Boolean(key) && !key.startsWith('/') && keyByteLength(key) <= MAX_KEY_LENGTH;
+	return isImageKey(key);
 }
 
 function filenameFromKey(key: string): string {
@@ -118,12 +115,12 @@ async function listDirectories(request: Request, env: Env): Promise<Response> {
 		const result = await env.IMAGES.list({
 			limit: 1000,
 			cursor,
-			include: [],
+			include: ['customMetadata'],
 		});
 
 		return jsonResponse({
 			success: true,
-			directories: directoriesFromKeys(result.objects.map((object) => object.key)),
+			directories: directoriesFromKeys(result.objects.filter((object) => !isTrashKey(object.key) && !isDeletedImage(object)).map((object) => object.key)),
 			scannedObjects: result.objects.length,
 			truncated: result.truncated,
 			cursor: result.truncated ? result.cursor : null,
@@ -138,25 +135,30 @@ async function listDirectories(request: Request, env: Env): Promise<Response> {
 async function listFiles(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
 	const prefix = url.searchParams.get('prefix')?.replace(/^\/+/, '') ?? '';
-	const cursor = url.searchParams.get('cursor') || undefined;
+	let cursor = url.searchParams.get('cursor') || undefined;
 
 	if (prefix.length > MAX_KEY_LENGTH) {
 		return jsonResponse({ success: false, message: 'Prefix is too long' }, 400);
 	}
 
 	try {
-		const result = await env.IMAGES.list({
-			limit: parseLimit(url.searchParams.get('limit')),
-			prefix,
-			cursor,
-			include: ['httpMetadata', 'customMetadata'],
-		});
+		let result: R2Objects;
+		let visible: R2Object[] = [];
+		// Skip pages containing only internal records/tombstones. Bound scan work;
+		// if many deleted entries remain, expose the continuation cursor to the UI.
+		for (let scan = 0; scan < 10; scan += 1) {
+			result = await env.IMAGES.list({ limit: parseLimit(url.searchParams.get('limit')), prefix, cursor,
+				include: ['httpMetadata', 'customMetadata'] });
+			visible = result.objects.filter((object) => !isTrashKey(object.key) && !isDeletedImage(object));
+			if (visible.length || !result.truncated) break;
+			cursor = result.cursor;
+		}
 
 		return jsonResponse({
 			success: true,
-			files: result.objects.map((object) => fileRecord(object)),
-			truncated: result.truncated,
-			cursor: result.truncated ? result.cursor : null,
+			files: visible.map((object) => fileRecord(object)),
+			truncated: result!.truncated,
+			cursor: result!.truncated ? result!.cursor : null,
 		});
 	} catch (error) {
 		console.error('Failed to list files:', error);
@@ -174,23 +176,15 @@ async function deleteFile(request: Request, env: Env): Promise<Response> {
 	}
 
 	try {
-		const existing = await env.IMAGES.head(key);
-
-		if (!existing) {
-			return jsonResponse({ success: false, message: 'File not found' }, 404);
-		}
-
-		await env.IMAGES.delete(key);
-
-		// A deleted R2 object can still be served by Cache API until its cached copy
-		// is removed. Clear the public image URL after the strongly consistent delete.
-		await caches.default.delete(new Request(imageUrlForKey(key), { method: 'GET' }));
+		const trash = await moveToTrash(env.IMAGES, key);
 
 		return jsonResponse({
 			success: true,
 			key,
+			trash,
 		});
 	} catch (error) {
+		if (error instanceof TrashError) return jsonResponse({ success: false, message: error.message }, error.status);
 		console.error('Failed to delete file:', error);
 
 		return jsonResponse({ success: false, message: 'Failed to delete file' }, 500);
@@ -231,13 +225,19 @@ async function deleteFiles(request: Request, env: Env): Promise<Response> {
 	}
 
 	try {
-		await env.IMAGES.delete(keys);
-		await Promise.all(keys.map((key) => caches.default.delete(new Request(imageUrlForKey(key), { method: 'GET' }))));
+		const deletedKeys: string[] = [];
+		const failed: { key: string; message: string }[] = [];
+		// Report partial results explicitly. Never claim failed copies were deleted.
+		for (const key of keys) {
+			try { await moveToTrash(env.IMAGES, key); deletedKeys.push(key); }
+			catch (error) { failed.push({ key, message: error instanceof TrashError ? error.message : '移入失败，请刷新检查。' }); }
+		}
 
 		return jsonResponse({
 			success: true,
-			deletedKeys: keys,
-			deletedCount: keys.length,
+			deletedKeys,
+			deletedCount: deletedKeys.length,
+			failed,
 		});
 	} catch (error) {
 		console.error('Failed to delete files:', error);
@@ -285,7 +285,8 @@ async function renameFile(request: Request, env: Env): Promise<Response> {
 	try {
 		const source = await env.IMAGES.get(key);
 
-		if (!source) {
+		if (!source || isDeletedImage(source)) {
+			if (source) await source.body.cancel();
 			return jsonResponse({ success: false, message: 'File not found' }, 404);
 		}
 

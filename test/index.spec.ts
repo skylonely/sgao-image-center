@@ -107,7 +107,7 @@ describe('image center worker', () => {
 		});
 
 		expect(deleteResponse.status).toBe(200);
-		expect(await env.IMAGES.head(testKeys[0])).toBeNull();
+		expect((await env.IMAGES.head(testKeys[0]))?.customMetadata?.sgaoTrashId).toBeTruthy();
 	});
 
 	it('returns 404 when deleting a missing file', async () => {
@@ -118,7 +118,7 @@ describe('image center worker', () => {
 		expect(response.status).toBe(404);
 		expect(await response.json()).toMatchObject({
 			success: false,
-			message: 'File not found',
+			message: '图片不存在或已在回收站。',
 		});
 	});
 
@@ -371,7 +371,7 @@ describe('image center worker', () => {
 		});
 
 		for (const key of keys) {
-			expect(await env.IMAGES.head(key)).toBeNull();
+			expect((await env.IMAGES.head(key))?.customMetadata?.sgaoTrashId).toBeTruthy();
 		}
 	});
 });

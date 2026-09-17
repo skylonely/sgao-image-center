@@ -2,10 +2,12 @@ import { handleFiles } from './routes/files';
 import { handleImage } from './routes/image';
 import { handleUpload } from './routes/upload';
 import { authResponse, authorizeImageRequest } from './auth';
+import { handleTrash } from './routes/trash';
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
+		if (url.pathname === '/api/trash') return handleTrash(request, env);
 		if (url.pathname === '/api/session' || url.pathname === '/api/login') {
 			if (request.method !== 'GET') return authResponse('Method Not Allowed', 405, 'METHOD_NOT_ALLOWED');
 			const identity = await authorizeImageRequest(request, env);

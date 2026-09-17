@@ -1,8 +1,10 @@
 import { getImage } from '../storage';
+import { isDeletedImage, isTrashKey } from '../trash';
 
 export async function handleImage(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
 	const path = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+	if (isTrashKey(path)) return new Response('Image not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
 
 	if (!path) {
 		return new Response('Missing image path', {
@@ -29,9 +31,17 @@ export async function handleImage(request: Request, env: Env, ctx: ExecutionCont
 		headers: request.headers,
 	});
 
+	// Check R2 before cache/static fallback, including old cached copies in other PoPs.
+	let currentObject: R2Object | null;
+	try {
+		currentObject = await env.IMAGES.head(path);
+		if (isDeletedImage(currentObject)) return new Response('Image not found', {
+			status: 404, headers: { 'Cache-Control': 'no-store' },
+		});
+	} catch { return new Response('Image service unavailable', { status: 502, headers: { 'Cache-Control': 'no-store' } }); }
 	const cachedResponse = await cache.match(cacheKey);
 
-	if (cachedResponse) {
+	if (cachedResponse && (!currentObject || cachedResponse.headers.get('ETag') === currentObject.httpEtag)) {
 		console.log('CACHE HIT:', path);
 
 		return request.method === 'HEAD'
@@ -56,6 +66,7 @@ export async function handleImage(request: Request, env: Env, ctx: ExecutionCont
 				},
 			});
 		}
+		if (imageResponse.status !== 200) return imageResponse;
 
 		const headers = new Headers(imageResponse.headers);
 
