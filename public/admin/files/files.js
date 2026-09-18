@@ -6,6 +6,9 @@ const manager = document.querySelector('#manager');
 const searchInput = document.querySelector('#searchInput');
 const directoryFilter = document.querySelector('#directoryFilter');
 const formatFilter = document.querySelector('#formatFilter');
+const sortOrder = document.querySelector('#sortOrder');
+const sortTimeDescOption = document.querySelector('#sortTimeDescOption');
+const sortTimeAscOption = document.querySelector('#sortTimeAscOption');
 const clearFiltersButton = document.querySelector('#clearFiltersButton');
 const directoryFilterHint = document.querySelector('#directoryFilterHint');
 const loadDirectoriesButton = document.querySelector('#loadDirectoriesButton');
@@ -64,6 +67,8 @@ let searchTimer = null;
 let searchPaused = false;
 let directoryScanRequested = false;
 let directoryOptionsSignature = '';
+const fileNameCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+sortOrder.value = 'time-desc';
 
 activeFilesButton.addEventListener('click', () => switchView(false));
 trashFilesButton.addEventListener('click', () => switchView(true));
@@ -81,6 +86,7 @@ function switchView(nextTrashMode) {
 	selectVisibleButton.hidden = trashMode;
 	searchInput.value = '';
 	directoryFilter.value = ''; formatFilter.value = ''; directoryScanRequested = false;
+	sortOrder.value = 'time-desc';
 	renderFiles();
 	loadFiles({ reset: true });
 }
@@ -93,6 +99,7 @@ loadMoreButton.addEventListener('click', () => loadFiles({ reset: false }));
 searchInput.addEventListener('input', handleSearchInput);
 directoryFilter.addEventListener('change', handleFilterChange);
 formatFilter.addEventListener('change', handleFilterChange);
+sortOrder.addEventListener('change', handleSearchInput);
 clearFiltersButton.addEventListener('click', () => {
 	directoryFilter.value = ''; formatFilter.value = '';
 	handleFilterChange();
@@ -207,6 +214,30 @@ function hasActiveCriteria() {
 	return Boolean(searchInput.value.trim() || directoryFilter.value || formatFilter.value);
 }
 
+function needsFullList() {
+	return hasActiveCriteria() || directoryScanRequested || sortOrder.value !== 'directory';
+}
+
+function compareFileRecords(left, right) {
+	const mode = sortOrder.value;
+	let comparison = 0;
+	if (mode.startsWith('time-') || mode.startsWith('size-')) {
+		const timeKey = trashMode ? 'deletedAt' : 'uploaded';
+		const sizeValue = (file) => typeof file.size === 'number' && file.size >= 0 ? file.size : NaN;
+		const a = mode.startsWith('time-') ? Date.parse(left[timeKey]) : sizeValue(left);
+		const b = mode.startsWith('time-') ? Date.parse(right[timeKey]) : sizeValue(right);
+		// Unknown dates/sizes stay last, regardless of direction.
+		if (Number.isFinite(a) !== Number.isFinite(b)) return Number.isFinite(a) ? -1 : 1;
+		if (Number.isFinite(a)) comparison = mode.endsWith('asc') ? a - b : b - a;
+	} else if (mode.startsWith('name-')) {
+		comparison = fileNameCollator.compare(left.key.split('/').at(-1), right.key.split('/').at(-1));
+		if (mode.endsWith('desc')) comparison *= -1;
+	}
+	if (comparison) return comparison;
+	if (left.key !== right.key) return left.key < right.key ? -1 : 1;
+	return String(left.id || '').localeCompare(String(right.id || ''), 'en');
+}
+
 function handleFilterChange() {
 	// Do not retain hidden selections when the filtering conditions change.
 	selectedKeys.clear();
@@ -258,7 +289,7 @@ function handleSearchInput() {
 	directoryScanRequested = false;
 	closeImagePreview();
 	managerStatus.textContent = ''; managerStatus.className = 'manager-status';
-	if (hasActiveCriteria() && !listComplete && window.imageAccount.authorized) {
+	if (needsFullList() && !listComplete && window.imageAccount.authorized) {
 		searchTimer = window.setTimeout(() => {
 			searchTimer = null;
 			if (operationBusy) { searchPaused = true; renderFiles(); return; }
@@ -269,16 +300,16 @@ function handleSearchInput() {
 }
 
 function updateSearchProgress(matches) {
-	const searching = hasActiveCriteria() || directoryScanRequested;
+	const searching = needsFullList();
 	searchProgress.hidden = !searching;
 	loadMoreButton.hidden = searching || listComplete;
 	if (!searching) return;
 	const busy = loadingFiles || searchTimer !== null;
-	const action = directoryFilter.value || formatFilter.value ? '筛选' : directoryScanRequested && !searchInput.value.trim() ? '读取' : '搜索';
+	const action = directoryFilter.value || formatFilter.value ? '筛选' : searchInput.value.trim() ? '搜索' : directoryScanRequested ? '读取' : '排序';
 	const phase = busy ? `正在${action}全部文件` : `${action}${searchPaused ? '已暂停' : '尚未完成'}`;
 	searchProgressText.textContent = listComplete
 		? `${action}完成：已检查 ${files.length} 个文件，找到 ${matches} 个匹配。`
-		: `${phase}：已检查 ${files.length} 个文件，找到 ${matches} 个匹配。${busy ? '' : '结果可能不完整。'}`;
+		: `${phase}：已检查 ${files.length} 个文件，找到 ${matches} 个匹配。结果可能不完整。`;
 	searchControlButton.hidden = listComplete;
 	searchControlButton.disabled = operationBusy;
 	searchControlButton.textContent = `${busy ? '暂停' : '继续'}${action}`;
@@ -329,7 +360,7 @@ async function loadFiles({ reset }) {
 
 			renderFiles();
 			// Continue through empty pages too; only pagination metadata determines completion.
-		} while ((hasActiveCriteria() || directoryScanRequested) && !listComplete);
+		} while (needsFullList() && !listComplete);
 	} catch (error) {
 		if (generation === loadGeneration && window.imageAccount.authorized) {
 			searchPaused = true;
@@ -398,14 +429,23 @@ function saveCollapsedFolders() {
 
 function renderFiles() {
 	updateDirectoryOptions();
+	sortTimeDescOption.textContent = trashMode ? '删除时间：最新在前' : '上传时间：最新在前';
+	sortTimeAscOption.textContent = trashMode ? '删除时间：最早在前' : '上传时间：最早在前';
 	const query = searchInput.value.trim().toLocaleLowerCase();
 	const filtered = hasActiveCriteria();
 	const visibleFiles = files.filter((file) => (!query || file.key.toLocaleLowerCase().includes(query)) && matchesFileFilters(file));
+	const previewed = previewIndex >= 0 ? renderedFiles[previewIndex] : null;
+	if (sortOrder.value !== 'directory') visibleFiles.sort(compareFileRecords);
 	const availableKeys = new Set(files.map((file) => file.key));
 
 	renderedFiles = visibleFiles;
+	if (previewed) {
+		previewIndex = renderedFiles.findIndex((file) => (file.id || file.key) === (previewed.id || previewed.key));
+		if (previewIndex < 0) closeImagePreview();
+		else updateImagePreview();
+	}
 	selectedKeys = new Set([...selectedKeys].filter((key) => availableKeys.has(key)));
-	fileCount.textContent = filtered ? `${visibleFiles.length} / ${files.length} 个文件${listComplete ? '' : '（已读取）'}` : `${files.length} 个文件`;
+	fileCount.textContent = filtered ? `${visibleFiles.length} / ${files.length} 个文件${listComplete ? '' : '（已读取）'}` : `${files.length} 个文件${listComplete ? '' : '（已读取）'}`;
 	updateSearchProgress(visibleFiles.length);
 	folderList.replaceChildren();
 	updateSelectionUI();
@@ -416,11 +456,18 @@ function renderFiles() {
 		empty.className = 'empty-state';
 		empty.innerHTML = `
 			<div class="empty-icon" aria-hidden="true">⌁</div>
-			<strong>${filtered ? listComplete ? '没有匹配的文件' : '暂未找到匹配的文件' : cursor ? '当前页没有可见图片' : trashMode ? '回收站是空的' : '还没有图片'}</strong>
-			<span>${filtered ? listComplete ? '换个关键词或筛选条件试试。' : '读取尚未完成，请等待或点击继续。' : cursor ? '点击加载更多，继续读取后面的图片。' : trashMode ? '移入回收站的图片会出现在这里。' : '从上传页添加第一张图片吧。'}</span>
+			<strong>${filtered ? listComplete ? '没有匹配的文件' : '暂未找到匹配的文件' : !listComplete && needsFullList() ? '尚未读取到图片' : cursor ? '当前页没有可见图片' : trashMode ? '回收站是空的' : '还没有图片'}</strong>
+			<span>${!listComplete && needsFullList() ? '读取尚未完成，请等待或点击继续。' : filtered ? '换个关键词或筛选条件试试。' : cursor ? '点击加载更多，继续读取后面的图片。' : trashMode ? '移入回收站的图片会出现在这里。' : '从上传页添加第一张图片吧。'}</span>
 		`;
 
 		folderList.append(empty);
+		return;
+	}
+
+	if (sortOrder.value !== 'directory') {
+		const list = document.createElement('div'); list.className = 'files-list sorted-files-list';
+		for (const file of visibleFiles) list.append(createFileRow({ ...file, filename: file.key.split('/').at(-1) }));
+		folderList.append(list);
 		return;
 	}
 
@@ -554,6 +601,10 @@ function createFileRow(file) {
 	meta.className = 'file-meta';
 	meta.textContent = `${formatSize(file.size)} · ${formatDate(file.uploaded)}`;
 	details.append(name, meta);
+	if (sortOrder.value !== 'directory') {
+		const path = document.createElement('p'); path.className = 'file-meta'; path.textContent = file.key;
+		details.append(path);
+	}
 
 	actions.className = 'file-actions';
 	actions.append(
@@ -738,7 +789,7 @@ async function renameFile(event) {
 		closeRenameDialog();
 		renderFiles();
 		showToast(`已重命名为 ${newFilename}`);
-		if ((hasActiveCriteria() || directoryScanRequested) && !listComplete) loadFiles({ reset: false });
+		if (needsFullList() && !listComplete) loadFiles({ reset: false });
 	} catch (error) {
 		renameError.textContent = error.message || '重命名失败，请稍后重试。';
 		renameError.hidden = false;
@@ -794,6 +845,7 @@ function formatSize(bytes) {
 
 function formatDate(value) {
 	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return '时间未知';
 
 	return new Intl.DateTimeFormat('zh-CN', {
 		year: 'numeric',
@@ -891,7 +943,7 @@ async function deleteFile() {
 		closeDeleteDialog();
 		renderFiles();
 		showToast(`已移入回收站 ${deleted.length} 张图片`);
-		if (!failed.length && (hasActiveCriteria() || directoryScanRequested) && !listComplete) loadFiles({ reset: false });
+		if (!failed.length && needsFullList() && !listComplete) loadFiles({ reset: false });
 		if (failed.length) showManagerError(`${failed.length} 张未移入：${failed.map((entry) => entry.message).join('；')}`);
 	} catch (error) {
 		operationBusy = false;
@@ -921,6 +973,7 @@ window.addEventListener('image-auth-changed', (event) => {
 		manager.hidden = true; selectionBar.hidden = true; searchProgress.hidden = true;
 		searchInput.value = ''; searchProgressText.textContent = ''; managerStatus.textContent = '';
 		directoryFilter.value = ''; formatFilter.value = ''; directoryScanRequested = false;
+		sortOrder.value = 'time-desc';
 		updateDirectoryOptions();
 		closeImagePreview(); closeRenameDialog(); closeDeleteDialog();
 	}

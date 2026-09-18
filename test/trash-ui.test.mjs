@@ -18,6 +18,7 @@ function harness(fetcher) {
 	const context = createContext({ document, window, localStorage: { getItem() { return null; }, setItem() {} },
 		URLSearchParams, AbortController, Intl, Date, console });
 	runInContext(code, context);
+	nodes.get('#sortOrder').value = 'directory';
 	return { nodes, events, requests, window, run: (value) => runInContext(value, context) };
 }
 const ok = (files = []) => Response.json({ success: true, files, truncated: false, cursor: null });

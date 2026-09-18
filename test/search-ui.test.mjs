@@ -8,7 +8,7 @@ const file = (key, id) => ({ key, id, url: `/image/${key}`, size: 100, uploaded:
 const page = (files, cursor = null) => Response.json({ success: true, files, truncated: Boolean(cursor), cursor });
 const tick = () => new Promise(setImmediate);
 
-function harness(fetcher) {
+function harness(fetcher, sortMode = 'directory') {
 	const nodes = new Map(), events = new Map(), requests = [], timers = new Map();
 	let timerId = 0;
 	function node() { return { hidden: false, value: '', textContent: '', children: [], attrs: {}, handlers: new Map(), disabled: false,
@@ -24,6 +24,8 @@ function harness(fetcher) {
 	const context = createContext({ document, window, localStorage: { getItem() { return null; }, setItem() {} },
 		URLSearchParams, AbortController, Intl, Date, console });
 	runInContext(code, context);
+	// Legacy pagination/search cases explicitly exercise directory browsing mode.
+	if (sortMode !== null) nodes.get('#sortOrder').value = sortMode;
 	return { nodes, events, requests, window, timers, run: (value) => runInContext(value, context),
 		input(value) { nodes.get('#searchInput').value = value; nodes.get('#searchInput').handlers.get('input')(); },
 		click() { return nodes.get('#searchControlButton').handlers.get('click')(); },
@@ -284,4 +286,115 @@ test('directory completion can pause and resume without a keyword or filter', as
 	resolve(page([file('stale/c.png')])); await reading; await h.click();
 	assert.equal(h.run('listComplete'), true); assert.equal(h.run('files.length'), 2);
 	assert.ok(h.nodes.get('#directoryFilter').children.some(option => option.value === 'dir:later'));
+});
+
+const sortBy = (h, mode) => { h.nodes.get('#sortOrder').value = mode; h.nodes.get('#sortOrder').handlers.get('change')(); };
+
+test('default latest-upload order reads all pages and places the newest image first across directories', async () => {
+	const old = { ...file('a/old.png'), uploaded: '2026-09-16' };
+	const newer = { ...file('z/new.png'), uploaded: '2026-09-18' };
+	const h = harness(async url => url.includes('cursor=next') ? page([newer]) : page([old], 'next'), null);
+	assert.equal(h.nodes.get('#sortOrder').value, 'time-desc');
+	await h.run('loadFiles({reset:true})');
+	assert.equal(h.requests.length, 2); assert.deepEqual(visibleKeys(h), ['z/new.png', 'a/old.png']);
+	assert.match(h.nodes.get('#searchProgressText').textContent, /排序完成/);
+	const rows = h.nodes.get('#folderList').children[0].children;
+	assert.equal(rows[0].children[2].children.at(-1).textContent, 'z/new.png');
+});
+
+test('time ascending and descending reflect real timestamp values and place invalid dates last', async () => {
+	const h = harness(async () => page([
+		{ ...file('old.png'), uploaded: '2026-09-17T23:00:00Z' },
+		{ ...file('new.png'), uploaded: '2026-09-18T09:00:00+08:00' },
+		{ ...file('unknown.png'), uploaded: 'invalid' },
+	]), 'time-desc');
+	await h.run('loadFiles({reset:true})'); assert.deepEqual(visibleKeys(h), ['new.png', 'old.png', 'unknown.png']);
+	sortBy(h, 'time-asc'); assert.deepEqual(visibleKeys(h), ['old.png', 'new.png', 'unknown.png']);
+	assert.equal(h.run("formatDate('invalid')"), '时间未知'); assert.equal(h.requests.length, 1);
+});
+
+test('filename natural sorting supports both directions and stable full-path ties', async () => {
+	const h = harness(async () => page([file('z/photo2.png'), file('a/photo10.png'), file('a/photo2.png'), file('b/photo1.png')]), 'name-asc');
+	await h.run('loadFiles({reset:true})'); assert.deepEqual(visibleKeys(h), ['b/photo1.png', 'a/photo2.png', 'z/photo2.png', 'a/photo10.png']);
+	sortBy(h, 'name-desc'); assert.deepEqual(visibleKeys(h), ['a/photo10.png', 'a/photo2.png', 'z/photo2.png', 'b/photo1.png']);
+});
+
+test('file size sorting supports both directions, zero size, stable ties and unknown values', async () => {
+	const h = harness(async () => page([
+		{ ...file('big.png'), size: 900 }, { ...file('zsmall.png'), size: 10 }, { ...file('asmall.png'), size: 10 },
+		{ ...file('zero.png'), size: 0 }, { ...file('unknown.png'), size: null },
+	]), 'size-desc');
+	await h.run('loadFiles({reset:true})'); assert.deepEqual(visibleKeys(h), ['big.png', 'asmall.png', 'zsmall.png', 'zero.png', 'unknown.png']);
+	sortBy(h, 'size-asc'); assert.deepEqual(visibleKeys(h), ['zero.png', 'asmall.png', 'zsmall.png', 'big.png', 'unknown.png']);
+});
+
+test('trash uses deletion time rather than upload time, resets its default, and breaks same-path ties by id', async () => {
+	const h = harness(async () => page([
+		{ ...file('same.png', 'id-b'), deletedAt: '2026-09-18', uploaded: '2026-09-01' },
+		{ ...file('same.png', 'id-a'), deletedAt: '2026-09-18', uploaded: '2026-09-02' },
+		{ ...file('old.png', 'id-old'), deletedAt: '2026-09-17', uploaded: '2026-09-20' },
+	]));
+	h.run('switchView(true)'); await tick();
+	assert.equal(h.nodes.get('#sortOrder').value, 'time-desc'); assert.equal(h.run('renderedFiles[0].id'), 'id-a');
+	assert.equal(h.run('renderedFiles[1].id'), 'id-b'); assert.equal(h.run('renderedFiles[2].id'), 'id-old');
+	assert.match(h.nodes.get('#sortTimeDescOption').textContent, /删除时间/);
+	sortBy(h, 'time-asc'); assert.equal(h.run('renderedFiles[0].id'), 'id-old');
+});
+
+test('sort combines with keyword, directory and format without changing selection or clear-filter semantics', async () => {
+	const h = harness(async () => page([
+		{ ...file('travel/photo2.png'), size: 2 }, { ...file('travel/day1/photo1.png'), size: 1 },
+		{ ...file('docs/photo3.png'), size: 3 }, { ...file('travel/photo4.svg'), size: 4 },
+	]), 'size-desc');
+	await h.run('loadFiles({reset:true})'); setFilter(h, '#directoryFilter', 'dir:travel'); setFilter(h, '#formatFilter', 'png'); h.input('photo');
+	assert.deepEqual(visibleKeys(h), ['travel/photo2.png', 'travel/day1/photo1.png']);
+	h.run("selectedKeys.add('travel/photo2.png')"); sortBy(h, 'name-asc'); assert.equal(h.run('selectedKeys.size'), 1);
+	assert.deepEqual(visibleKeys(h), ['travel/day1/photo1.png', 'travel/photo2.png']);
+	h.nodes.get('#clearFiltersButton').handlers.get('click')(); assert.equal(h.nodes.get('#sortOrder').value, 'name-asc');
+	assert.equal(h.nodes.get('#searchInput').value, 'photo'); assert.equal(h.run('renderedFiles.length'), 4);
+});
+
+test('sort loading can pause, retry after failure, and never claim complete ordering prematurely', async () => {
+	let resolve, calls = 0;
+	const pending = new Promise(done => { resolve = done; });
+	const h = harness(async () => ++calls === 1 ? page([file('old.png')], 'next') : calls === 2 ? pending
+		: calls === 3 ? Response.json({ success: false, message: '网络中断' }, { status: 500 }) : page([{ ...file('new.png'), uploaded: '2026-09-19' }]), null);
+	const reading = h.run('loadFiles({reset:true})'); await tick();
+	assert.match(h.nodes.get('#searchProgressText').textContent, /结果可能不完整/); h.click();
+	resolve(page([file('late.png')])); await reading; assert.match(h.nodes.get('#searchProgressText').textContent, /排序已暂停/);
+	await h.click(); assert.match(h.nodes.get('#managerStatus').textContent, /网络中断/);
+	await h.click(); assert.deepEqual(visibleKeys(h), ['new.png', 'old.png']); assert.equal(h.run('listComplete'), true);
+});
+
+test('changing sort cancels stale listing; directory mode restores grouping and manual pagination', async () => {
+	let resolve, calls = 0;
+	const pending = new Promise(done => { resolve = done; });
+	const h = harness(async () => ++calls === 1 ? page([file('a/first.png')], 'next') : pending, null);
+	const loading = h.run('loadFiles({reset:true})'); await tick(); sortBy(h, 'directory');
+	assert.equal(h.requests[1].options.signal.aborted, true); resolve(page([file('stale.png')])); await loading;
+	assert.deepEqual(visibleKeys(h), ['a/first.png']); assert.equal(h.nodes.get('#searchProgress').hidden, true);
+	assert.equal(h.nodes.get('#loadMoreButton').hidden, false); assert.equal(h.nodes.get('#folderList').children[0].className, 'folder-section');
+});
+
+test('preview stays on the same image while a later page reorders the list and next navigation follows visible order', async () => {
+	let resolve;
+	const pending = new Promise(done => { resolve = done; });
+	const h = harness(async url => url.includes('cursor=next') ? pending : page([
+		{ ...file('middle.png'), uploaded: '2026-09-18' }, { ...file('old.png'), uploaded: '2026-09-17' },
+	], 'next'), null);
+	const loading = h.run('loadFiles({reset:true})'); await tick(); h.run("openImagePreview('middle.png', null)");
+	resolve(page([{ ...file('new.png'), uploaded: '2026-09-19' }])); await loading;
+	assert.equal(h.nodes.get('#previewName').textContent, 'middle.png'); assert.equal(h.run('previewIndex'), 1);
+	assert.equal(h.nodes.get('#previewPosition').textContent, '2 / 3');
+	h.run('showNextPreview()'); assert.equal(h.nodes.get('#previewName').textContent, 'old.png');
+	sortBy(h, 'name-asc'); assert.equal(h.nodes.get('#imagePreview').hidden, true);
+});
+
+test('refresh preserves chosen sorting; logout restores latest first and prevents stale data from returning', async () => {
+	const h = harness(async () => page([file('a.png'), file('b.png')]), 'name-desc');
+	await h.run('loadFiles({reset:true})'); await h.run('loadFiles({reset:true})');
+	assert.equal(h.nodes.get('#sortOrder').value, 'name-desc'); assert.deepEqual(visibleKeys(h), ['b.png', 'a.png']);
+	h.window.imageAccount.authorized = false; h.events.get('image-auth-changed')({ detail: { authorized: false } });
+	assert.equal(h.nodes.get('#sortOrder').value, 'time-desc'); assert.equal(h.run('files.length'), 0);
+	assert.equal(h.nodes.get('#searchProgress').hidden, true);
 });

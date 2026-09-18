@@ -64,6 +64,16 @@
 							<option value="png">PNG</option><option value="webp">WebP</option><option value="gif">GIF</option><option value="svg">SVG</option>
 						</select>
 					</div>
+					<div class="filter-field filter-sort">
+						<label for="sortOrder">排序</label>
+						<select id="sortOrder">
+							<option id="sortTimeDescOption" value="time-desc">上传时间：最新在前</option>
+							<option id="sortTimeAscOption" value="time-asc">上传时间：最早在前</option>
+							<option value="name-asc">文件名：升序</option><option value="name-desc">文件名：降序</option>
+							<option value="size-desc">文件大小：从大到小</option><option value="size-asc">文件大小：从小到大</option>
+							<option value="directory">按目录浏览</option>
+						</select>
+					</div>
 					<button id="clearFiltersButton" class="toolbar-button" type="button" disabled>清除筛选</button>
 				</div>
 				<div class="filter-hint-row">
