@@ -50,6 +50,27 @@
 					</div>
 				</div>
 
+				<div class="filter-toolbar" role="group" aria-label="图片筛选">
+					<div class="filter-field">
+						<label for="directoryFilter">目录</label>
+						<select id="directoryFilter" aria-describedby="directoryFilterHint">
+							<option value="">全部目录</option><option value="root">根目录</option>
+						</select>
+					</div>
+					<div class="filter-field filter-format">
+						<label for="formatFilter">图片格式</label>
+						<select id="formatFilter">
+							<option value="">全部格式</option><option value="jpeg">JPEG（jpg / jpeg）</option>
+							<option value="png">PNG</option><option value="webp">WebP</option><option value="gif">GIF</option><option value="svg">SVG</option>
+						</select>
+					</div>
+					<button id="clearFiltersButton" class="toolbar-button" type="button" disabled>清除筛选</button>
+				</div>
+				<div class="filter-hint-row">
+					<p id="directoryFilterHint" class="help-text">目录选项会随读取补齐；可读取全部目录。</p>
+					<button id="loadDirectoriesButton" class="toolbar-button" type="button">读取全部目录</button>
+				</div>
+
 				<div id="selectionBar" class="selection-bar" hidden>
 					<strong id="selectedCount">已选择 0 个文件</strong>
 					<span>单次最多选择 50 个</span>
