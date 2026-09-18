@@ -1248,6 +1248,11 @@ select:focus {
 .move-results li { padding: 10px 0; border-bottom: 1px solid #eaecf0; overflow-wrap: anywhere; font-size: 13px; color: #475467; }
 .move-results li[data-state="failed"] { color: #b42318; }
 .move-results li[data-state="moved"] { color: #027a48; }
+.replace-dialog input[type="file"] { display: block; width: 100%; margin-top: 8px; padding: 10px; color: #344054; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; }
+.versions-dialog .move-results { max-height: 320px; }
+.versions-dialog .move-results li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 14px; }
+.versions-dialog .move-results li > span { color: #98a2b3; font-size: 12px; }
+.version-actions { display: flex; grid-row: span 2; gap: 8px; }
 
 .rename-error {
 	margin-top: 8px !important;

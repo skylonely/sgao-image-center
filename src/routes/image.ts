@@ -1,10 +1,10 @@
 import { getImage } from '../storage';
-import { isDeletedImage, isTrashKey } from '../trash';
+import { isDeletedImage, isTrashKey, isVersionKey } from '../trash';
 
 export async function handleImage(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
 	const path = decodeURIComponent(url.pathname).replace(/^\/+/, '');
-	if (isTrashKey(path)) return new Response('Image not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+	if (isTrashKey(path) || isVersionKey(path)) return new Response('Image not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
 
 	if (!path) {
 		return new Response('Missing image path', {

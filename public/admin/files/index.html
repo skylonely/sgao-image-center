@@ -210,6 +210,39 @@
 			</form>
 		</div>
 
+		<div id="replaceDialog" class="modal-backdrop" hidden>
+			<form id="replaceForm" class="delete-dialog move-dialog replace-dialog" role="dialog" aria-modal="true" aria-labelledby="replaceTitle" aria-describedby="replaceWarning">
+				<h2 id="replaceTitle">替换图片</h2>
+				<p id="replaceWarning">原图片地址保持不变。确认后会先保存当前图片为历史版本，再写入新图片。</p>
+				<code id="replaceKey"></code>
+				<label class="rename-label" for="replaceInput">选择新图片</label>
+				<input id="replaceInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml" required />
+				<p id="replaceSelection" class="help-text">支持 JPEG、PNG、WebP、GIF、SVG，单张最大 10 MB。</p>
+				<p class="help-text">每张图片保留最近 5 个历史版本；最早的版本会自动清理。</p>
+				<p id="replaceError" class="rename-error" role="alert" hidden></p>
+				<div class="dialog-actions">
+					<button id="cancelReplaceButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmReplaceButton" class="dialog-button primary-choice" type="submit">确认替换</button>
+				</div>
+			</form>
+		</div>
+
+		<div id="versionsDialog" class="modal-backdrop" hidden>
+			<form id="versionsForm" class="delete-dialog move-dialog versions-dialog" role="dialog" aria-modal="true" aria-labelledby="versionsTitle" aria-describedby="versionsDescription">
+				<h2 id="versionsTitle">版本历史</h2>
+				<p id="versionsDescription">可预览或恢复旧版本。恢复会把当前图片也保存为一个新历史版本。</p>
+				<code id="versionsKey"></code>
+				<p id="versionsStatus" class="move-summary" role="status" aria-live="polite">正在读取历史版本…</p>
+				<ul id="versionsList" class="move-results" aria-label="历史版本列表"></ul>
+				<label id="restoreAcknowledgement" class="move-ack" hidden><input id="restoreAcknowledged" type="checkbox" />我确认恢复此版本，当前图片将被替换。</label>
+				<p id="versionsError" class="rename-error" role="alert" hidden></p>
+				<div class="dialog-actions">
+					<button id="closeVersionsButton" class="dialog-button" type="button">关闭</button>
+					<button id="confirmRestoreButton" class="dialog-button primary-choice" type="submit" hidden>恢复所选版本</button>
+				</div>
+			</form>
+		</div>
+
 		<div id="deleteDialog" class="modal-backdrop" hidden>
 			<div class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteTitle" aria-describedby="deleteDescription">
 				<div class="danger-icon" aria-hidden="true">

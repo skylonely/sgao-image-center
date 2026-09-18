@@ -67,6 +67,24 @@ const renameInput = document.querySelector('#renameInput');
 const renameError = document.querySelector('#renameError');
 const cancelRenameButton = document.querySelector('#cancelRenameButton');
 const confirmRenameButton = document.querySelector('#confirmRenameButton');
+const replaceDialog = document.querySelector('#replaceDialog');
+const replaceForm = document.querySelector('#replaceForm');
+const replaceKey = document.querySelector('#replaceKey');
+const replaceInput = document.querySelector('#replaceInput');
+const replaceSelection = document.querySelector('#replaceSelection');
+const replaceError = document.querySelector('#replaceError');
+const cancelReplaceButton = document.querySelector('#cancelReplaceButton');
+const confirmReplaceButton = document.querySelector('#confirmReplaceButton');
+const versionsDialog = document.querySelector('#versionsDialog');
+const versionsForm = document.querySelector('#versionsForm');
+const versionsKey = document.querySelector('#versionsKey');
+const versionsStatus = document.querySelector('#versionsStatus');
+const versionsList = document.querySelector('#versionsList');
+const versionsError = document.querySelector('#versionsError');
+const restoreAcknowledgement = document.querySelector('#restoreAcknowledgement');
+const restoreAcknowledged = document.querySelector('#restoreAcknowledged');
+const closeVersionsButton = document.querySelector('#closeVersionsButton');
+const confirmRestoreButton = document.querySelector('#confirmRestoreButton');
 const toast = document.querySelector('#toast');
 const imagePreview = document.querySelector('#imagePreview');
 const previewImage = document.querySelector('#previewImage');
@@ -84,6 +102,9 @@ let selectedKeys = new Set();
 let cursor = null;
 let pendingDeleteKeys = [];
 let pendingRenameFile = null;
+let pendingReplaceFile = null;
+let pendingVersionFile = null;
+let pendingRestoreVersion = null;
 let toastTimer = null;
 let previewIndex = -1;
 let lastPreviewTrigger = null;
@@ -120,7 +141,7 @@ function switchView(nextTrashMode) {
 	cancelFileLoad();
 	listComplete = false; searchPaused = false;
 	files = []; cursor = null; selectedKeys.clear();
-	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeMoveDialog(); closeExportDialog(true);
+	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeReplaceDialog(true); closeVersionsDialog(true); closeMoveDialog(); closeExportDialog(true);
 	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
 	trashFilesButton.setAttribute('aria-pressed', String(trashMode));
 	trashNotice.hidden = !trashMode;
@@ -180,6 +201,13 @@ cancelDeleteButton.addEventListener('click', closeDeleteDialog);
 confirmDeleteButton.addEventListener('click', deleteFile);
 cancelRenameButton.addEventListener('click', closeRenameDialog);
 renameForm.addEventListener('submit', renameFile);
+cancelReplaceButton.addEventListener('click', () => closeReplaceDialog());
+replaceForm.addEventListener('submit', replaceFile);
+replaceInput.addEventListener('change', updateReplaceSelection);
+replaceDialog.addEventListener('click', (event) => { if (event.target === replaceDialog) closeReplaceDialog(); });
+closeVersionsButton.addEventListener('click', () => closeVersionsDialog());
+versionsForm.addEventListener('submit', restoreVersion);
+versionsDialog.addEventListener('click', (event) => { if (event.target === versionsDialog) closeVersionsDialog(); });
 
 deleteDialog.addEventListener('click', (event) => {
 	if (event.target === deleteDialog) {
@@ -194,6 +222,14 @@ renameDialog.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+	if (!versionsDialog.hidden) {
+		if (event.key === 'Escape') closeVersionsDialog();
+		return;
+	}
+	if (!replaceDialog.hidden) {
+		if (event.key === 'Escape') closeReplaceDialog();
+		return;
+	}
 	if (!exportDialog.hidden) {
 		if (event.key === 'Escape') cancelExport();
 		return;
@@ -766,6 +802,8 @@ function createFileRow(file) {
 		createActionButton('复制地址', 'copy', () => copyText(file.url, '地址已复制')),
 		createActionButton('Markdown', 'markdown', () => copyText(`![](${file.url})`, 'Markdown 已复制')),
 		createOpenLink(file.url),
+		createActionButton('替换', 'replace', () => openReplaceDialog(file)),
+		createActionButton('历史', 'history', () => openVersionsDialog(file)),
 		createActionButton('重命名', 'rename', () => openRenameDialog(file)),
 		createActionButton('删除', 'delete', () => openDeleteDialog(file.key)),
 	);
@@ -1085,6 +1123,139 @@ function closeRenameDialog() {
 	document.body.classList.remove('modal-open');
 }
 
+function openReplaceDialog(file) {
+	if (operationBusy || trashMode || !window.imageAccount.authorized) return;
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeVersionsDialog(true);
+	pendingReplaceFile = { ...file };
+	replaceKey.textContent = file.key;
+	replaceInput.value = '';
+	replaceSelection.textContent = '支持 JPEG、PNG、WebP、GIF、SVG，单张最大 10 MB。';
+	replaceError.hidden = true; replaceError.textContent = '';
+	confirmReplaceButton.disabled = false; confirmReplaceButton.textContent = '确认替换';
+	replaceDialog.hidden = false;
+	document.body.classList.add('modal-open');
+	replaceInput.focus();
+}
+
+function closeReplaceDialog(force = false) {
+	if (operationBusy && !force) return;
+	pendingReplaceFile = null;
+	replaceInput.value = '';
+	replaceError.hidden = true; replaceError.textContent = '';
+	replaceDialog.hidden = true;
+	document.body.classList.remove('modal-open');
+}
+
+function updateReplaceSelection() {
+	const file = replaceInput.files?.[0];
+	if (!file) {
+		replaceSelection.textContent = '支持 JPEG、PNG、WebP、GIF、SVG，单张最大 10 MB。';
+		return;
+	}
+	replaceSelection.textContent = `${file.name} · ${formatSize(file.size)}`;
+	if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'].includes(file.type) || file.size <= 0 || file.size > 10 * 1024 * 1024) {
+		replaceError.textContent = '请选择支持的非空图片，且单张不能超过 10 MB。';
+		replaceError.hidden = false;
+	} else {
+		replaceError.hidden = true; replaceError.textContent = '';
+	}
+}
+
+async function replaceFile(event) {
+	event.preventDefault();
+	if (operationBusy || !pendingReplaceFile) return;
+	const replacement = replaceInput.files?.[0];
+	if (!replacement) {
+		replaceError.textContent = '请选择要替换的新图片。'; replaceError.hidden = false; replaceInput.focus(); return;
+	}
+	updateReplaceSelection();
+	if (!replaceError.hidden) return;
+	const source = { ...pendingReplaceFile };
+	operationBusy = true; cancelFileLoad(); searchPaused = true;
+	confirmReplaceButton.disabled = true; cancelReplaceButton.disabled = true; confirmReplaceButton.textContent = '替换中…';
+	try {
+		const body = new FormData();
+		body.set('replace', 'version-v1'); body.set('replaceKey', source.key); body.set('conflict', 'reject');
+		body.set('expectedEtag', source.etag); body.set('expectedVersion', source.version); body.set('file', replacement, replacement.name);
+		await requestFiles('/api/upload', { method: 'POST', body });
+		operationBusy = false;
+		closeReplaceDialog();
+		showToast('图片已替换，旧图已保存到版本历史。');
+		await loadFiles({ reset: true });
+	} catch (error) {
+		replaceError.textContent = error.message || '替换失败，请刷新后重试。'; replaceError.hidden = false;
+	} finally {
+		operationBusy = false; cancelReplaceButton.disabled = false; confirmReplaceButton.disabled = false; confirmReplaceButton.textContent = '确认替换';
+		setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles();
+	}
+}
+
+function versionPreviewUrl(file, version) {
+	return `/api/versions?view=preview&key=${encodeURIComponent(file.key)}&id=${encodeURIComponent(version.id)}`;
+}
+
+async function openVersionsDialog(file) {
+	if (operationBusy || trashMode || !window.imageAccount.authorized) return;
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeReplaceDialog(true);
+	pendingVersionFile = { ...file }; pendingRestoreVersion = null;
+	versionsKey.textContent = file.key; versionsList.replaceChildren(); versionsError.hidden = true; versionsError.textContent = '';
+	versionsStatus.textContent = '正在读取历史版本…'; restoreAcknowledgement.hidden = true; restoreAcknowledged.checked = false;
+	confirmRestoreButton.hidden = true; versionsDialog.hidden = false; document.body.classList.add('modal-open'); closeVersionsButton.focus();
+	try {
+		const result = await requestFiles(`/api/versions?key=${encodeURIComponent(file.key)}`);
+		if (pendingVersionFile?.key !== file.key) return;
+		const versions = Array.isArray(result.versions) ? result.versions : [];
+		versionsStatus.textContent = versions.length ? `保留了 ${versions.length} 个历史版本（最多 5 个）。` : '还没有历史版本。替换图片后会在这里显示。';
+		for (const version of versions) {
+			const item = document.createElement('li');
+			const title = document.createElement('strong'); title.textContent = `${formatDateTime(version.createdAt)} · ${formatSize(version.size)}`;
+			const type = document.createElement('span'); type.textContent = version.contentType;
+			const actions = document.createElement('div'); actions.className = 'version-actions';
+			const preview = document.createElement('a'); preview.className = 'file-action open'; preview.href = versionPreviewUrl(file, version); preview.target = '_blank'; preview.rel = 'noreferrer'; preview.textContent = '预览';
+			const restore = createActionButton('恢复', 'history', () => selectVersionForRestore(version));
+			actions.append(preview, restore); item.append(title, type, actions); versionsList.append(item);
+		}
+	} catch (error) {
+		versionsStatus.textContent = '无法读取历史版本。'; versionsError.textContent = error.message || '读取失败，请稍后重试。'; versionsError.hidden = false;
+	}
+}
+
+function selectVersionForRestore(version) {
+	if (!pendingVersionFile || operationBusy) return;
+	pendingRestoreVersion = version; restoreAcknowledgement.hidden = false; restoreAcknowledged.checked = false;
+	confirmRestoreButton.hidden = false; confirmRestoreButton.disabled = false; confirmRestoreButton.textContent = `恢复 ${formatDateTime(version.createdAt)} 的版本`;
+	versionsStatus.textContent = '请确认恢复。当前图片会被保存为新的历史版本。';
+	restoreAcknowledged.focus();
+}
+
+function closeVersionsDialog(force = false) {
+	if (operationBusy && !force) return;
+	pendingVersionFile = null; pendingRestoreVersion = null; restoreAcknowledged.checked = false; restoreAcknowledgement.hidden = true;
+	versionsList.replaceChildren(); versionsError.hidden = true; versionsError.textContent = ''; versionsDialog.hidden = true;
+	document.body.classList.remove('modal-open');
+}
+
+async function restoreVersion(event) {
+	event.preventDefault();
+	if (operationBusy || !pendingVersionFile || !pendingRestoreVersion) return;
+	if (!restoreAcknowledged.checked) {
+		versionsError.textContent = '请先确认恢复操作。'; versionsError.hidden = false; return;
+	}
+	const file = { ...pendingVersionFile }; const version = { ...pendingRestoreVersion };
+	operationBusy = true; cancelFileLoad(); searchPaused = true;
+	confirmRestoreButton.disabled = true; closeVersionsButton.disabled = true; confirmRestoreButton.textContent = '恢复中…'; versionsError.hidden = true;
+	try {
+		await requestFiles('/api/versions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restore', key: file.key, id: version.id, expectedEtag: file.etag, expectedVersion: file.version }) });
+		operationBusy = false; closeVersionsDialog(); showToast('已恢复历史版本，替换前的图片已保存到版本历史。');
+		await loadFiles({ reset: true });
+	} catch (error) {
+		versionsError.textContent = error.message || '恢复失败，请刷新后重试。'; versionsError.hidden = false;
+	} finally {
+		operationBusy = false; closeVersionsButton.disabled = false; confirmRestoreButton.disabled = false; confirmRestoreButton.textContent = '恢复所选版本';
+		setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles();
+	}
+}
+
 async function renameFile(event) {
 	event.preventDefault();
 	if (operationBusy) return;
@@ -1192,6 +1363,14 @@ function formatDate(value) {
 		year: 'numeric',
 		month: '2-digit',
 		day: '2-digit',
+	}).format(date);
+}
+
+function formatDateTime(value) {
+	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return '时间未知';
+	return new Intl.DateTimeFormat('zh-CN', {
+		year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
 	}).format(date);
 }
 
@@ -1317,7 +1496,7 @@ window.addEventListener('image-auth-changed', (event) => {
 		directoryFilter.value = ''; formatFilter.value = ''; directoryScanRequested = false;
 		sortOrder.value = 'time-desc';
 		updateDirectoryOptions();
-		closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
+		closeImagePreview(); closeRenameDialog(); closeReplaceDialog(true); closeVersionsDialog(true); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
 	}
 });
 

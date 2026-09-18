@@ -1,9 +1,11 @@
 // Internal data must never be served by public image routes or accepted as file keys.
 export const TRASH_PREFIX = '__sgao_trash/';
 export const TRASH_RECORDS = `${TRASH_PREFIX}records/`;
+export const VERSION_PREFIX = '__sgao_versions/';
 export const isTrashKey = (key: string) => key === '__sgao_trash' || key.startsWith(TRASH_PREFIX);
+export const isVersionKey = (key: string) => key === '__sgao_versions' || key.startsWith(VERSION_PREFIX);
 export const isDeletedImage = (object: R2Object | null) => Boolean(object?.customMetadata?.sgaoTrashId);
-export const isImageKey = (key: string) => Boolean(key) && !key.startsWith('/') && !isTrashKey(key)
+export const isImageKey = (key: string) => Boolean(key) && !key.startsWith('/') && !isTrashKey(key) && !isVersionKey(key)
 	&& !key.includes('\\') && !/[\u0000-\u001f\u007f]/.test(key)
 	&& !key.split('/').some((segment) => !segment || segment === '.' || segment === '..')
 	&& new TextEncoder().encode(key).byteLength <= 1024;

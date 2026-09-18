@@ -1,5 +1,5 @@
 import { authorizeImageRequest } from '../auth';
-import { isDeletedImage, isImageKey, isTrashKey, moveToTrash, TrashError } from '../trash';
+import { isDeletedImage, isImageKey, isTrashKey, isVersionKey, moveToTrash, TrashError } from '../trash';
 import { moveImage, MoveError } from '../move';
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -122,7 +122,7 @@ async function listDirectories(request: Request, env: Env): Promise<Response> {
 
 		return jsonResponse({
 			success: true,
-			directories: directoriesFromKeys(result.objects.filter((object) => !isTrashKey(object.key) && !isDeletedImage(object)).map((object) => object.key)),
+			directories: directoriesFromKeys(result.objects.filter((object) => !isTrashKey(object.key) && !isVersionKey(object.key) && !isDeletedImage(object)).map((object) => object.key)),
 			scannedObjects: result.objects.length,
 			truncated: result.truncated,
 			cursor: result.truncated ? result.cursor : null,
@@ -151,7 +151,7 @@ async function listFiles(request: Request, env: Env): Promise<Response> {
 		for (let scan = 0; scan < 10; scan += 1) {
 			result = await env.IMAGES.list({ limit: parseLimit(url.searchParams.get('limit')), prefix, cursor,
 				include: ['httpMetadata', 'customMetadata'] });
-			visible = result.objects.filter((object) => !isTrashKey(object.key) && !isDeletedImage(object));
+			visible = result.objects.filter((object) => !isTrashKey(object.key) && !isVersionKey(object.key) && !isDeletedImage(object));
 			if (visible.length || !result.truncated) break;
 			cursor = result.cursor;
 		}

@@ -1,5 +1,6 @@
 import { authorizeImageRequest } from '../auth';
 import { isDeletedImage, isImageKey } from '../trash';
+import { replaceImageWithVersion, VersionError } from '../versions';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_RENAME_ATTEMPTS = 100;
@@ -242,8 +243,12 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 		const folderValue = formData.get('folder')?.toString() ?? 'common';
 		const conflictValue = formData.get('conflict')?.toString() ?? 'reject';
 		const expectedEtag = formData.get('expectedEtag')?.toString() ?? '';
+		const expectedVersion = formData.get('expectedVersion')?.toString() ?? '';
 		const restoreKey = formData.get('restoreKey')?.toString() ?? '';
 		const isBackupRestore = formData.get('restore')?.toString() === 'backup-v1';
+		const replaceKey = formData.get('replaceKey')?.toString() ?? '';
+		const isVersionReplace = formData.get('replace')?.toString() === 'version-v1';
+		const preservesOriginalKey = isBackupRestore || isVersionReplace;
 
 		if (!(file instanceof File)) {
 			return jsonResponse(
@@ -290,10 +295,11 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 		}
 
 		const folder = normalizeFolder(folderValue);
-		const filename = isBackupRestore ? restoreKey.split('/').at(-1) ?? '' : normalizeFilename(file.name);
+		const preservedKey = isBackupRestore ? restoreKey : replaceKey;
+		const filename = preservesOriginalKey ? preservedKey.split('/').at(-1) ?? '' : normalizeFilename(file.name);
 		const conflict = CONFLICT_POLICIES.has(conflictValue) ? (conflictValue as ConflictPolicy) : null;
 
-		if (!isBackupRestore && !folder) {
+		if (!preservesOriginalKey && !folder) {
 			return jsonResponse(
 				{
 					success: false,
@@ -303,7 +309,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			);
 		}
 
-		if (!filename || (isBackupRestore && !isImageKey(restoreKey))) {
+		if (!filename || (preservesOriginalKey && !isImageKey(preservedKey))) {
 			return jsonResponse(
 				{
 					success: false,
@@ -345,6 +351,27 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 				},
 				400,
 			);
+		}
+
+		if (isVersionReplace) {
+			if (conflictValue !== 'reject' || !expectedEtag || !expectedVersion) {
+				return jsonResponse({ success: false, message: '替换请求无效。' }, 400);
+			}
+			const result = await replaceImageWithVersion(env.IMAGES, replaceKey, file, expectedEtag, expectedVersion);
+			await caches.default.delete(new Request(imageUrlForKey(replaceKey), { method: 'GET' }));
+			return jsonResponse({
+				success: true,
+				key: replaceKey,
+				url: imageUrlForKey(replaceKey),
+				filename,
+				folder: replaceKey.split('/').slice(0, -1).join('/'),
+				contentType: file.type,
+				size: file.size,
+				etag: result.object.etag,
+				version: result.object.version,
+				historyId: result.historyId,
+				replaced: true,
+			});
 		}
 
 		let key = isBackupRestore ? restoreKey : `${folder}/${filename}`;
@@ -450,6 +477,9 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			overwritten,
 		});
 	} catch (error) {
+		if (error instanceof VersionError) {
+			return jsonResponse({ success: false, message: error.message }, error.status);
+		}
 		console.error('Upload failed:', error);
 
 		return jsonResponse(
