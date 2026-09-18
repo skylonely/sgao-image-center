@@ -520,3 +520,25 @@ test('refresh preserves chosen sorting; logout restores latest first and prevent
 	assert.equal(h.nodes.get('#sortOrder').value, 'time-desc'); assert.equal(h.run('files.length'), 0);
 	assert.equal(h.nodes.get('#searchProgress').hidden, true);
 });
+
+test('overview scans active files and recycle bin independently, then renders complete storage totals', async () => {
+	const h = harness(async (url) => {
+		const parsed = new URL(url, 'https://img.sgao.cc'); const cursor = parsed.searchParams.get('cursor');
+		if (parsed.pathname === '/api/trash') return page([file('old.png', 'trash-1')]);
+		return cursor ? page([file('docs/b.png')]) : page([{ ...file('travel/a.png'), size: 400 }, { ...file('logo.svg'), size: 20 }], 'next');
+	});
+	h.nodes.get('#overviewPanel').hidden = true; h.run('toggleOverview()'); assert.equal(h.nodes.get('#overviewPanel').hidden, false);
+	await h.run('scanOverview()');
+	assert.equal(h.requests.length, 3); assert.match(h.nodes.get('#overviewStatus').textContent, /扫描完成：正常图片 3 张，回收站 1 张/);
+	assert.equal(h.nodes.get('#overviewCards').children[0].children[1].textContent, '3 张 · 520 B');
+	assert.match(h.nodes.get('#overviewDirectories').children[0].children[0].textContent, /travel|docs|根目录/);
+});
+
+test('overview can stop a pending metadata scan without showing a partial total', async () => {
+	let resolve; const pending = new Promise((done) => { resolve = done; });
+	const h = harness(async () => pending);
+	const scanning = h.run('scanOverview()'); await tick();
+	h.run('cancelOverviewScan()'); assert.equal(h.requests[0].options.signal.aborted, true);
+	resolve(page([file('late.png')])); await scanning; assert.match(h.nodes.get('#overviewStatus').textContent, /已取消/);
+	assert.equal(h.nodes.get('#overviewCards').children.length, 0);
+});

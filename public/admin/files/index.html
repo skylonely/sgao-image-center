@@ -46,6 +46,7 @@
 
 					<div class="manager-meta">
 						<p id="fileCount" class="file-count" aria-live="polite"></p>
+						<button id="overviewButton" class="toolbar-button" type="button" aria-expanded="false">图片库概览</button>
 						<button id="selectVisibleButton" class="toolbar-button" type="button">选择当前</button>
 						<button id="exportVisibleButton" class="toolbar-button" type="button">导出当前结果</button>
 					</div>
@@ -81,6 +82,17 @@
 					<p id="directoryFilterHint" class="help-text">目录选项会随读取补齐；可读取全部目录。</p>
 					<button id="loadDirectoriesButton" class="toolbar-button" type="button">读取全部目录</button>
 				</div>
+
+				<section id="overviewPanel" class="overview-panel" hidden aria-labelledby="overviewTitle">
+					<div class="overview-heading"><div><h2 id="overviewTitle">图片库概览</h2><p>按需扫描正常图片与回收站，只读取元数据，不会下载、修改或删除图片。</p></div><button id="overviewScanButton" class="toolbar-button" type="button">扫描图片库</button></div>
+					<p id="overviewStatus" class="help-text" role="status" aria-live="polite">尚未扫描。</p>
+					<div id="overviewCards" class="overview-cards"></div>
+					<div class="overview-grid">
+						<section><h3>目录占用</h3><ol id="overviewDirectories" class="overview-list"></ol></section>
+						<section><h3>图片格式</h3><ol id="overviewFormats" class="overview-list"></ol></section>
+						<section class="overview-large"><h3>最大图片</h3><ol id="overviewLargest" class="overview-list"></ol></section>
+					</div>
+				</section>
 
 				<div id="selectionBar" class="selection-bar" hidden>
 					<strong id="selectedCount">已选择 0 个文件</strong>

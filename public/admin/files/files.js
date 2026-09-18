@@ -20,6 +20,14 @@ const managerStatus = document.querySelector('#managerStatus');
 const folderList = document.querySelector('#folderList');
 const loadMoreButton = document.querySelector('#loadMoreButton');
 const selectVisibleButton = document.querySelector('#selectVisibleButton');
+const overviewButton = document.querySelector('#overviewButton');
+const overviewPanel = document.querySelector('#overviewPanel');
+const overviewScanButton = document.querySelector('#overviewScanButton');
+const overviewStatus = document.querySelector('#overviewStatus');
+const overviewCards = document.querySelector('#overviewCards');
+const overviewDirectories = document.querySelector('#overviewDirectories');
+const overviewFormats = document.querySelector('#overviewFormats');
+const overviewLargest = document.querySelector('#overviewLargest');
 const exportVisibleButton = document.querySelector('#exportVisibleButton');
 const selectionBar = document.querySelector('#selectionBar');
 const selectedCount = document.querySelector('#selectedCount');
@@ -96,6 +104,10 @@ let moveGeneration = 0;
 let pendingExportFiles = [];
 let exportController = null;
 let exportGeneration = 0;
+let overviewController = null;
+let overviewGeneration = 0;
+let overviewBusy = false;
+const MAX_OVERVIEW_FILES = 10000;
 const fileNameCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 sortOrder.value = 'time-desc';
 
@@ -148,6 +160,8 @@ searchControlButton.addEventListener('click', () => {
 	}
 });
 selectVisibleButton.addEventListener('click', toggleVisibleSelection);
+overviewButton.addEventListener('click', toggleOverview);
+overviewScanButton.addEventListener('click', () => overviewBusy ? cancelOverviewScan() : scanOverview());
 exportVisibleButton.addEventListener('click', () => openExportDialog('current'));
 clearSelectionButton.addEventListener('click', clearSelection);
 batchDeleteButton.addEventListener('click', () => openDeleteDialog([...selectedKeys]));
@@ -256,6 +270,89 @@ async function requestFiles(url, options = {}) {
 	}
 
 	return result;
+}
+
+function toggleOverview() {
+	if (overviewBusy) return;
+	overviewPanel.hidden = !overviewPanel.hidden;
+	overviewButton.setAttribute('aria-expanded', String(!overviewPanel.hidden));
+	overviewButton.textContent = overviewPanel.hidden ? '图片库概览' : '收起概览';
+}
+
+function resetOverview() {
+	overviewGeneration += 1; overviewController?.abort(); overviewController = null; overviewBusy = false;
+	overviewPanel.hidden = true; overviewButton.setAttribute('aria-expanded', 'false'); overviewButton.textContent = '图片库概览'; overviewScanButton.textContent = '扫描图片库'; overviewScanButton.disabled = false;
+	overviewStatus.textContent = '尚未扫描。'; overviewCards.replaceChildren(); overviewDirectories.replaceChildren(); overviewFormats.replaceChildren(); overviewLargest.replaceChildren();
+}
+
+function formatCategory(file) {
+	const name = file.key.split('/').at(-1) || ''; const dot = name.lastIndexOf('.'); const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+	if (extension === 'jpg' || extension === 'jpeg') return 'JPEG';
+	return ({ png: 'PNG', webp: 'WebP', gif: 'GIF', svg: 'SVG' })[extension] || '其他';
+}
+
+function aggregateOverview(active, trash) {
+	const bucket = (records, key) => {
+		const map = new Map();
+		for (const file of records) { const label = key(file); const current = map.get(label) || { label, count: 0, size: 0 }; current.count += 1; current.size += Number(file.size) || 0; map.set(label, current); }
+		return [...map.values()].sort((left, right) => right.size - left.size || right.count - left.count || left.label.localeCompare(right.label, 'zh-CN'));
+	};
+	return { activeCount: active.length, activeBytes: active.reduce((total, file) => total + (Number(file.size) || 0), 0), trashCount: trash.length, trashBytes: trash.reduce((total, file) => total + (Number(file.size) || 0), 0),
+		directories: bucket(active, (file) => file.key.includes('/') ? file.key.split('/')[0] : '根目录'), formats: bucket(active, formatCategory), largest: [...active].sort((left, right) => (Number(right.size) || 0) - (Number(left.size) || 0) || left.key.localeCompare(right.key, 'zh-CN')).slice(0, 20) };
+}
+
+function renderOverviewList(element, records, formatter) {
+	element.replaceChildren();
+	if (!records.length) { const item = document.createElement('li'); item.textContent = '暂无数据'; element.append(item); return; }
+	for (const record of records) { const item = document.createElement('li'); const label = document.createElement('span'); const detail = document.createElement('span'); label.textContent = record.label || record.key; detail.textContent = formatter(record); item.append(label, detail); element.append(item); }
+}
+
+function renderOverview(active, trash, complete) {
+	const summary = aggregateOverview(active, trash); overviewCards.replaceChildren();
+	for (const [label, value] of [['正常图片', `${summary.activeCount} 张 · ${formatSize(summary.activeBytes)}`], ['回收站', `${summary.trashCount} 张 · ${formatSize(summary.trashBytes)}`], ['合计占用', formatSize(summary.activeBytes + summary.trashBytes)]]) {
+		const card = document.createElement('div'); card.className = 'overview-card'; const caption = document.createElement('span'); const number = document.createElement('strong'); caption.textContent = label; number.textContent = value; card.append(caption, number); overviewCards.append(card);
+	}
+	renderOverviewList(overviewDirectories, summary.directories.slice(0, 8), (record) => `${record.count} 张 · ${formatSize(record.size)}`);
+	renderOverviewList(overviewFormats, summary.formats, (record) => `${record.count} 张 · ${formatSize(record.size)}`);
+	renderOverviewList(overviewLargest, summary.largest, (record) => formatSize(record.size));
+	if (complete) overviewStatus.textContent = `扫描完成：正常图片 ${summary.activeCount} 张，回收站 ${summary.trashCount} 张。统计时间 ${formatDate(new Date().toISOString())}。`;
+}
+
+async function collectOverview(path, label, controller, generation) {
+	const entries = []; const ids = new Set(); const cursors = new Set(); let cursor = null;
+	do {
+		if (generation !== overviewGeneration || !window.imageAccount.authorized) { const error = new Error('统计已取消'); error.name = 'AbortError'; throw error; }
+		const query = new URLSearchParams({ limit: '200' }); if (cursor) query.set('cursor', cursor);
+		const result = await requestFiles(`${path}?${query}`, { signal: controller.signal });
+		if (generation !== overviewGeneration || !window.imageAccount.authorized || controller.signal.aborted) { const error = new Error('统计已取消'); error.name = 'AbortError'; throw error; }
+		if (!Array.isArray(result.files) || (result.truncated && (!result.cursor || cursors.has(result.cursor)))) throw new Error('统计分页信息异常，请稍后重试。');
+		for (const file of result.files) { const id = file.id || file.key; if (!ids.has(id)) { ids.add(id); entries.push(file); } }
+		if (entries.length > MAX_OVERVIEW_FILES) throw new Error(`图片数量超过 ${MAX_OVERVIEW_FILES} 张，暂不生成不完整统计。`);
+		cursor = result.truncated ? result.cursor : null; if (cursor) cursors.add(cursor);
+		overviewStatus.textContent = `正在扫描${label}：已读取 ${entries.length} 张…`;
+	} while (cursor);
+	return entries;
+}
+
+function cancelOverviewScan() {
+	if (!overviewController) return;
+	overviewController.abort(); overviewGeneration += 1; overviewController = null; overviewBusy = false; overviewScanButton.textContent = '重新扫描'; overviewScanButton.disabled = false; overviewStatus.textContent = '统计扫描已取消，未显示不完整结果。';
+}
+
+async function scanOverview() {
+	if (overviewBusy || !window.imageAccount.authorized) return;
+	const generation = ++overviewGeneration; const controller = new AbortController(); overviewController = controller; overviewBusy = true; overviewScanButton.textContent = '停止扫描'; overviewCards.replaceChildren(); overviewDirectories.replaceChildren(); overviewFormats.replaceChildren(); overviewLargest.replaceChildren();
+	try {
+		const active = await collectOverview('/api/files', '正常图片', controller, generation);
+		const trash = await collectOverview('/api/trash', '回收站', controller, generation);
+		if (generation !== overviewGeneration || !window.imageAccount.authorized) return;
+		renderOverview(active, trash, true);
+	} catch (error) {
+		if (generation !== overviewGeneration || error?.name === 'AbortError') return;
+		overviewStatus.textContent = error?.message || '统计扫描失败，请稍后重试。';
+	} finally {
+		if (generation === overviewGeneration) { overviewBusy = false; overviewController = null; overviewScanButton.textContent = '重新扫描'; overviewScanButton.disabled = false; }
+	}
 }
 
 function cancelFileLoad() {
@@ -1212,6 +1309,7 @@ window.addEventListener('image-auth-changed', (event) => {
 	if (event.detail.authorized) loadFiles({ reset: true });
 	else {
 		cancelFileLoad(); listComplete = false; searchPaused = false;
+		resetOverview();
 		operationBusy = false;
 		files = []; cursor = null; selectedKeys.clear(); folderList.replaceChildren();
 		manager.hidden = true; selectionBar.hidden = true; searchProgress.hidden = true;
