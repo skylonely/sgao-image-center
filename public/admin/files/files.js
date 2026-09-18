@@ -4,6 +4,9 @@ const trashFilesButton = document.querySelector('#trashFilesButton');
 const trashNotice = document.querySelector('#trashNotice');
 const manager = document.querySelector('#manager');
 const searchInput = document.querySelector('#searchInput');
+const searchProgress = document.querySelector('#searchProgress');
+const searchProgressText = document.querySelector('#searchProgressText');
+const searchControlButton = document.querySelector('#searchControlButton');
 const fileCount = document.querySelector('#fileCount');
 const managerStatus = document.querySelector('#managerStatus');
 const folderList = document.querySelector('#folderList');
@@ -49,6 +52,11 @@ let trashMode = false;
 let loadGeneration = 0;
 let pendingPurgeFile = null;
 let operationBusy = false;
+let listComplete = false;
+let loadingFiles = false;
+let loadController = null;
+let searchTimer = null;
+let searchPaused = false;
 
 activeFilesButton.addEventListener('click', () => switchView(false));
 trashFilesButton.addEventListener('click', () => switchView(true));
@@ -56,7 +64,8 @@ trashFilesButton.addEventListener('click', () => switchView(true));
 function switchView(nextTrashMode) {
 	if (operationBusy || !window.imageAccount.authorized) return;
 	trashMode = nextTrashMode;
-	loadGeneration += 1;
+	cancelFileLoad();
+	listComplete = false; searchPaused = false;
 	files = []; cursor = null; selectedKeys.clear();
 	closeImagePreview(); closeDeleteDialog(); closeRenameDialog();
 	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
@@ -71,9 +80,17 @@ function switchView(nextTrashMode) {
 const MAX_BATCH_DELETE = 50;
 const collapsedFolders = new Set(readCollapsedFolders());
 
-refreshButton.addEventListener('click', () => loadFiles({ reset: true }));
+refreshButton.addEventListener('click', () => { if (!operationBusy) return loadFiles({ reset: true }); });
 loadMoreButton.addEventListener('click', () => loadFiles({ reset: false }));
-searchInput.addEventListener('input', renderFiles);
+searchInput.addEventListener('input', handleSearchInput);
+searchControlButton.addEventListener('click', () => {
+	if (operationBusy || !window.imageAccount.authorized) return;
+	if (loadingFiles || searchTimer !== null) {
+		cancelFileLoad(); searchPaused = true; renderFiles();
+	} else {
+		searchPaused = false; return loadFiles({ reset: false });
+	}
+});
 selectVisibleButton.addEventListener('click', toggleVisibleSelection);
 clearSelectionButton.addEventListener('click', clearSelection);
 batchDeleteButton.addEventListener('click', () => openDeleteDialog([...selectedKeys]));
@@ -159,42 +176,108 @@ async function requestFiles(url, options = {}) {
 	return result;
 }
 
+function cancelFileLoad() {
+	window.clearTimeout(searchTimer); searchTimer = null;
+	loadGeneration += 1;
+	loadController?.abort(); loadController = null;
+	loadingFiles = false;
+	setLoading(false);
+}
+
+function handleSearchInput() {
+	cancelFileLoad(); searchPaused = false;
+	closeImagePreview();
+	managerStatus.textContent = ''; managerStatus.className = 'manager-status';
+	if (searchInput.value.trim() && !listComplete && window.imageAccount.authorized) {
+		searchTimer = window.setTimeout(() => {
+			searchTimer = null;
+			if (operationBusy) { searchPaused = true; renderFiles(); return; }
+			loadFiles({ reset: false });
+		}, 300);
+	}
+	renderFiles();
+}
+
+function updateSearchProgress(matches) {
+	const searching = Boolean(searchInput.value.trim());
+	searchProgress.hidden = !searching;
+	loadMoreButton.hidden = searching || listComplete;
+	if (!searching) return;
+	const busy = loadingFiles || searchTimer !== null;
+	searchProgressText.textContent = listComplete
+		? `搜索完成：已检查 ${files.length} 个文件，找到 ${matches} 个匹配。`
+		: `${busy ? '正在搜索全部文件' : searchPaused ? '搜索已暂停' : '搜索尚未完成'}：已检查 ${files.length} 个文件，找到 ${matches} 个匹配。${busy ? '' : '结果可能不完整。'}`;
+	searchControlButton.hidden = listComplete;
+	searchControlButton.disabled = operationBusy;
+	searchControlButton.textContent = busy ? '暂停搜索' : '继续搜索';
+}
+
 async function loadFiles({ reset }) {
 	if (!window.imageAccount.authorized) return;
-	const generation = ++loadGeneration;
+	cancelFileLoad();
+	const generation = loadGeneration;
 	const requestedTrashMode = trashMode;
+	const seenCursors = new Set(cursor ? [cursor] : []);
+	const controller = new AbortController();
+	loadController = controller;
+	searchPaused = false;
+	if (reset) {
+		files = []; cursor = null; listComplete = false; selectedKeys.clear();
+		seenCursors.clear();
+		closeImagePreview();
+	}
+	loadingFiles = true;
 
 	setLoading(true, reset ? '正在读取文件…' : '正在加载更多…');
+	renderFiles();
 
 	try {
-		const query = new URLSearchParams({ limit: '100' });
+		do {
+			if (listComplete) break;
+			const query = new URLSearchParams({ limit: '100' });
+			if (cursor) query.set('cursor', cursor);
 
-		if (!reset && cursor) {
-			query.set('cursor', cursor);
-		}
+			const result = await requestFiles(`${requestedTrashMode ? '/api/trash' : '/api/files'}?${query}`, { signal: controller.signal });
+			if (generation !== loadGeneration || !window.imageAccount.authorized) return;
+			if (!Array.isArray(result.files) || (result.truncated && (!result.cursor || seenCursors.has(result.cursor)))) {
+				throw new Error('服务器分页信息异常，请刷新后重试。');
+			}
+			if (result.truncated) seenCursors.add(result.cursor);
 
-		const result = await requestFiles(`${requestedTrashMode ? '/api/trash' : '/api/files'}?${query}`);
-		if (generation !== loadGeneration || !window.imageAccount.authorized) return;
+			// A repeated page must not duplicate files (trash may have several versions of one path).
+			const merged = new Map(files.map((file) => [file.id || file.key, file]));
+			for (const file of result.files) merged.set(file.id || file.key, file);
+			files = [...merged.values()];
+			cursor = result.cursor;
+			listComplete = !result.truncated;
 
-		files = reset ? result.files : [...files, ...result.files];
-		cursor = result.cursor;
+			manager.hidden = false;
+			managerStatus.textContent = '';
+			managerStatus.className = 'manager-status';
 
-		manager.hidden = false;
-		managerStatus.textContent = '';
-		managerStatus.className = 'manager-status';
-		loadMoreButton.hidden = !result.truncated;
-
-		renderFiles();
+			renderFiles();
+			// Continue through empty pages too; only pagination metadata determines completion.
+		} while (searchInput.value.trim() && !listComplete);
 	} catch (error) {
-		if (generation === loadGeneration && window.imageAccount.authorized) showManagerError(error.message || '文件读取失败，请稍后重试。');
+		if (generation === loadGeneration && window.imageAccount.authorized) {
+			searchPaused = true;
+			showManagerError(error.message || '文件读取失败，请稍后重试。');
+		}
 	} finally {
-		if (generation === loadGeneration) setLoading(false);
+		if (generation === loadGeneration) {
+			loadingFiles = false; loadController = null;
+			setLoading(false); renderFiles();
+		}
 	}
 }
 
 function setLoading(loading, message = '') {
-	refreshButton.disabled = loading;
+	refreshButton.disabled = loading || operationBusy;
 	loadMoreButton.disabled = loading;
+	folderList.setAttribute('aria-busy', String(loading));
+	if (!loading && managerStatus.className === 'manager-status loading') {
+		managerStatus.className = 'manager-status'; managerStatus.textContent = '';
+	}
 
 	if (loading && manager.hidden === false) {
 		managerStatus.className = 'manager-status loading';
@@ -249,6 +332,7 @@ function renderFiles() {
 	renderedFiles = visibleFiles;
 	selectedKeys = new Set([...selectedKeys].filter((key) => availableKeys.has(key)));
 	fileCount.textContent = query ? `${visibleFiles.length} / ${files.length} 个文件` : `${files.length} 个文件`;
+	updateSearchProgress(visibleFiles.length);
 	folderList.replaceChildren();
 	updateSelectionUI();
 
@@ -258,8 +342,8 @@ function renderFiles() {
 		empty.className = 'empty-state';
 		empty.innerHTML = `
 			<div class="empty-icon" aria-hidden="true">⌁</div>
-			<strong>${query ? '没有匹配的文件' : cursor ? '当前页没有可见图片' : trashMode ? '回收站是空的' : '还没有图片'}</strong>
-			<span>${query ? '换个关键词试试，也可加载更多后搜索。' : cursor ? '点击加载更多，继续读取后面的图片。' : trashMode ? '移入回收站的图片会出现在这里。' : '从上传页添加第一张图片吧。'}</span>
+			<strong>${query ? listComplete ? '没有匹配的文件' : '暂未找到匹配的文件' : cursor ? '当前页没有可见图片' : trashMode ? '回收站是空的' : '还没有图片'}</strong>
+			<span>${query ? listComplete ? '换个文件名或目录关键词试试。' : '搜索尚未完成，请等待或点击继续搜索。' : cursor ? '点击加载更多，继续读取后面的图片。' : trashMode ? '移入回收站的图片会出现在这里。' : '从上传页添加第一张图片吧。'}</span>
 		`;
 
 		folderList.append(empty);
@@ -516,6 +600,7 @@ function showPreviousPreview() {
 }
 
 function openRenameDialog(file) {
+	if (operationBusy) return;
 	pendingRenameFile = file;
 	renameInput.value = file.key.split('/').at(-1) || file.key;
 	renameError.hidden = true;
@@ -536,6 +621,7 @@ function closeRenameDialog() {
 
 async function renameFile(event) {
 	event.preventDefault();
+	if (operationBusy) return;
 
 	if (!pendingRenameFile) {
 		return;
@@ -551,7 +637,9 @@ async function renameFile(event) {
 		return;
 	}
 
+	operationBusy = true;
 	confirmRenameButton.disabled = true;
+	cancelFileLoad(); searchPaused = true;
 	confirmRenameButton.textContent = '保存中…';
 	renameError.hidden = true;
 
@@ -572,15 +660,19 @@ async function renameFile(event) {
 			selectedKeys.add(result.file.key);
 		}
 
+		operationBusy = false;
 		closeRenameDialog();
 		renderFiles();
 		showToast(`已重命名为 ${newFilename}`);
+		if (searchInput.value.trim() && !listComplete) loadFiles({ reset: false });
 	} catch (error) {
 		renameError.textContent = error.message || '重命名失败，请稍后重试。';
 		renameError.hidden = false;
 	} finally {
+		operationBusy = false; setLoading(loadingFiles);
 		confirmRenameButton.disabled = false;
 		confirmRenameButton.textContent = '保存名称';
+		if (window.imageAccount.authorized) renderFiles();
 	}
 }
 
@@ -693,6 +785,7 @@ async function deleteFile() {
 
 	const keys = [...pendingDeleteKeys];
 	operationBusy = true;
+	cancelFileLoad(); searchPaused = true;
 
 	confirmDeleteButton.disabled = true;
 	confirmDeleteButton.textContent = '移入中…';
@@ -724,15 +817,17 @@ async function deleteFile() {
 		closeDeleteDialog();
 		renderFiles();
 		showToast(`已移入回收站 ${deleted.length} 张图片`);
+		if (!failed.length && searchInput.value.trim() && !listComplete) loadFiles({ reset: false });
 		if (failed.length) showManagerError(`${failed.length} 张未移入：${failed.map((entry) => entry.message).join('；')}`);
 	} catch (error) {
 		operationBusy = false;
 		closeDeleteDialog();
 		showManagerError(error.message || '删除失败，请稍后重试。');
 	} finally {
-		operationBusy = false;
+		operationBusy = false; setLoading(loadingFiles);
 		confirmDeleteButton.disabled = false;
 		confirmDeleteButton.textContent = '移入回收站';
+		if (window.imageAccount.authorized) renderFiles();
 	}
 }
 
@@ -746,10 +841,11 @@ function showToast(message) {
 window.addEventListener('image-auth-changed', (event) => {
 	if (event.detail.authorized) loadFiles({ reset: true });
 	else {
-		loadGeneration += 1;
+		cancelFileLoad(); listComplete = false; searchPaused = false;
 		operationBusy = false;
 		files = []; cursor = null; selectedKeys.clear(); folderList.replaceChildren();
-		manager.hidden = true; selectionBar.hidden = true;
+		manager.hidden = true; selectionBar.hidden = true; searchProgress.hidden = true;
+		searchInput.value = ''; searchProgressText.textContent = ''; managerStatus.textContent = '';
 		closeImagePreview(); closeRenameDialog(); closeDeleteDialog();
 	}
 });
@@ -776,12 +872,14 @@ function createTrashRow(file) {
 async function restoreFile(file) {
 	if (operationBusy) return;
 	operationBusy = true;
+	cancelFileLoad(); searchPaused = true;
 	try {
 		const result = await requestFiles('/api/trash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: file.id }) });
 		showToast(result.cleanupPending ? '图片已恢复，回收站副本清理待重试' : '图片已恢复到原路径');
+		operationBusy = false;
 		await loadFiles({ reset: true });
 	} catch (error) { showManagerError(error.message || '恢复失败，请刷新重试。'); }
-	finally { operationBusy = false; }
+	finally { operationBusy = false; setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles(); }
 }
 
 function openPurgeDialog(file) {
@@ -796,10 +894,11 @@ function openPurgeDialog(file) {
 async function permanentlyDeleteFile() {
 	const file = pendingPurgeFile;
 	operationBusy = true; confirmDeleteButton.disabled = true; confirmDeleteButton.textContent = '彻底删除中…';
+	cancelFileLoad(); searchPaused = true;
 	try {
 		await requestFiles('/api/trash', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: file.id, confirmation: 'DELETE' }) });
 		operationBusy = false; closeDeleteDialog();
 		showToast('已彻底删除，无法恢复'); await loadFiles({ reset: true });
 	} catch (error) { operationBusy = false; closeDeleteDialog(); showManagerError(error.message || '彻底删除失败，请刷新检查。'); }
-	finally { operationBusy = false; confirmDeleteButton.disabled = false; }
+	finally { operationBusy = false; setLoading(loadingFiles); confirmDeleteButton.disabled = false; if (window.imageAccount.authorized) renderFiles(); }
 }

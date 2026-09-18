@@ -555,6 +555,24 @@ select:focus {
 	font-size: 14px;
 }
 
+.search-progress {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 18px;
+	padding: 12px 14px;
+	border-radius: 10px;
+	color: #344054;
+	background: #f2f4f7;
+	font-size: 14px;
+}
+
+.search-progress[hidden] { display: none; }
+.search-progress p { margin: 0; flex: 1 1 220px; }
+.search-progress button { flex: none; }
+
 .manager-status.loading,
 .manager-status.error {
 	margin-top: 18px;

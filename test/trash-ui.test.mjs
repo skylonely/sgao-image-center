@@ -16,7 +16,7 @@ function harness(fetcher) {
 	const window = { imageAccount: { authorized: true, request(url, options) { requests.push({ url, options }); return fetcher(url, options); } },
 		addEventListener(name, handler) { events.set(name, handler); }, clearTimeout() {}, setTimeout() {} };
 	const context = createContext({ document, window, localStorage: { getItem() { return null; }, setItem() {} },
-		URLSearchParams, Intl, Date, console });
+		URLSearchParams, AbortController, Intl, Date, console });
 	runInContext(code, context);
 	return { nodes, events, requests, window, run: (value) => runInContext(value, context) };
 }
