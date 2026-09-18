@@ -13,11 +13,19 @@ const suggestedFilename = document.querySelector('#suggestedFilename');
 const cancelConflictButton = document.querySelector('#cancelConflictButton');
 const overwriteButton = document.querySelector('#overwriteButton');
 const renameButton = document.querySelector('#renameButton');
+const backupInput = document.querySelector('#backupInput');
+const backupStatus = document.querySelector('#backupStatus');
+const backupList = document.querySelector('#backupList');
+const restoreButton = document.querySelector('#restoreButton');
+const restoreStatus = document.querySelector('#restoreStatus');
 
 let selectedFiles = [];
 let conflictResolver = null;
 let directoryRequestId = 0;
 let directorySuggestions = new Set();
+let backupFiles = [];
+let selectedBackupKeys = new Set();
+let restoreBusy = false;
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ALLOWED_FILE_TYPES = new Map([
@@ -27,6 +35,47 @@ const ALLOWED_FILE_TYPES = new Map([
 	['image/gif', new Set(['gif'])],
 	['image/svg+xml', new Set(['svg'])],
 ]);
+
+function resetBackup() {
+	backupFiles = []; selectedBackupKeys.clear(); restoreBusy = false;
+	backupInput.value = ''; backupInput.disabled = false; backupStatus.textContent = ''; backupList.replaceChildren(); restoreStatus.replaceChildren(); restoreStatus.className = 'status';
+	updateRestoreButton();
+}
+
+function updateRestoreButton() {
+	restoreButton.textContent = restoreBusy ? '正在恢复…' : `恢复所选（${selectedBackupKeys.size}）`;
+	restoreButton.disabled = restoreBusy || !selectedBackupKeys.size || !window.imageAccount.authorized;
+}
+
+function renderBackupFiles() {
+	backupList.replaceChildren();
+	for (const entry of backupFiles) {
+		const row = document.createElement('label'); row.className = 'file-item';
+		const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedBackupKeys.has(entry.key); checkbox.disabled = restoreBusy;
+		checkbox.setAttribute('aria-label', `恢复 ${entry.key}`); checkbox.addEventListener('change', () => { if (checkbox.checked) selectedBackupKeys.add(entry.key); else selectedBackupKeys.delete(entry.key); updateRestoreButton(); });
+		const name = document.createElement('span'); name.className = 'file-name'; name.textContent = entry.key;
+		const size = document.createElement('span'); size.className = 'file-size'; size.textContent = formatSize(entry.size);
+		row.append(checkbox, name, size); backupList.append(row);
+	}
+	updateRestoreButton();
+}
+
+backupInput.addEventListener('change', async () => {
+	const archive = backupInput.files?.[0]; backupFiles = []; selectedBackupKeys.clear(); backupList.replaceChildren(); restoreStatus.replaceChildren(); restoreStatus.className = 'status'; updateRestoreButton();
+	if (!archive) { backupStatus.textContent = ''; return; }
+	if (!window.imageAccount.authorized) { backupStatus.textContent = '请先登录图片管理账号。'; return; }
+	if (!window.ImageZip?.readBackup) { backupStatus.textContent = '当前浏览器不支持读取图片备份。'; return; }
+	backupInput.disabled = true; backupStatus.textContent = '正在校验备份文件…';
+	try {
+		const backup = await window.ImageZip.readBackup(archive);
+		if (!window.imageAccount.authorized) return;
+		backupFiles = backup.files; selectedBackupKeys = new Set(backup.files.map((entry) => entry.key));
+		backupStatus.textContent = `备份有效：${backup.files.length} 张图片，共 ${formatSize(backup.totalBytes)}。同名图片会跳过，不会覆盖。`;
+		renderBackupFiles();
+	} catch (error) {
+		backupStatus.textContent = error instanceof Error ? error.message : '备份文件无法读取。';
+	} finally { backupInput.disabled = false; updateRestoreButton(); }
+});
 
 folderInput.value = localStorage.getItem('sgaoUploadFolder') || 'common';
 
@@ -425,6 +474,44 @@ async function uploadWithConflictChoice(file, folder) {
 	return attempt;
 }
 
+async function sendBackupRestore(entry) {
+	const formData = new FormData();
+	formData.append('restore', 'backup-v1'); formData.append('restoreKey', entry.key); formData.append('conflict', 'reject'); formData.append('file', entry.file);
+	const response = await window.imageAccount.request('/api/upload', { method: 'POST', body: formData });
+	const result = await response.json();
+	if (response.status === 409 && result.code === 'FILE_EXISTS') return { skipped: true, key: entry.key };
+	if (!response.ok || !result.success) throw new Error(result.message || '恢复失败');
+	return { restored: true, key: entry.key, url: result.url };
+}
+
+function showRestoreResults(restored, skipped, failed) {
+	restoreStatus.replaceChildren(); restoreStatus.className = failed.length && !restored.length ? 'status error' : 'status success';
+	const summary = document.createElement('strong'); summary.textContent = `恢复 ${restored.length} 张，跳过同名 ${skipped.length} 张，失败 ${failed.length} 张。`; restoreStatus.append(summary);
+	for (const [label, values] of [['已恢复', restored], ['跳过', skipped], ['失败', failed]]) {
+		if (!values.length) continue;
+		const group = document.createElement('div'); group.className = 'result-list'; const heading = document.createElement('p'); heading.textContent = label; group.append(heading);
+		for (const value of values) { const item = document.createElement('div'); item.className = 'result-item'; item.textContent = typeof value === 'string' ? value : value.key; group.append(item); }
+		restoreStatus.append(group);
+	}
+}
+
+restoreButton.addEventListener('click', async () => {
+	if (restoreBusy || !window.imageAccount.authorized) return;
+	const snapshot = backupFiles.filter((entry) => selectedBackupKeys.has(entry.key)); if (!snapshot.length) return;
+	restoreBusy = true; backupInput.disabled = true; restoreStatus.replaceChildren(); restoreStatus.className = 'status'; updateRestoreButton();
+	const restored = []; const skipped = []; const failed = [];
+	for (let index = 0; index < snapshot.length; index += 1) {
+		if (!window.imageAccount.authorized) break;
+		backupStatus.textContent = `正在恢复 ${index + 1} / ${snapshot.length}：${snapshot[index].key}`;
+		try { const result = await sendBackupRestore(snapshot[index]); if (result.restored) restored.push(result); else skipped.push(result); }
+		catch (error) { failed.push(`${snapshot[index].key}: ${error instanceof Error ? error.message : '恢复失败'}`); }
+	}
+	for (const result of [...restored, ...skipped]) selectedBackupKeys.delete(result.key);
+	restoreBusy = false; backupInput.disabled = false;
+	if (window.imageAccount.authorized) { backupStatus.textContent = failed.length ? '恢复已完成，失败项仍保持勾选，可修正后重试。' : '恢复已完成。'; showRestoreResults(restored, skipped, failed); renderBackupFiles(); loadDirectorySuggestions(); }
+	else resetBackup();
+});
+
 uploadButton.addEventListener('click', async () => {
 	const folder = normalizeFolder(folderInput.value);
 
@@ -494,5 +581,6 @@ window.addEventListener('image-auth-changed', (event) => {
 	else {
 		directoryRequestId += 1; directorySuggestions.clear(); renderDirectorySuggestions(); resolveConflict('cancel');
 		selectedFiles = []; fileInput.value = ''; fileList.replaceChildren(); statusBox.replaceChildren();
+		resetBackup();
 	}
 });

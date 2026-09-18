@@ -1,5 +1,5 @@
 import { authorizeImageRequest } from '../auth';
-import { isDeletedImage } from '../trash';
+import { isDeletedImage, isImageKey } from '../trash';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_RENAME_ATTEMPTS = 100;
@@ -242,6 +242,8 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 		const folderValue = formData.get('folder')?.toString() ?? 'common';
 		const conflictValue = formData.get('conflict')?.toString() ?? 'reject';
 		const expectedEtag = formData.get('expectedEtag')?.toString() ?? '';
+		const restoreKey = formData.get('restoreKey')?.toString() ?? '';
+		const isBackupRestore = formData.get('restore')?.toString() === 'backup-v1';
 
 		if (!(file instanceof File)) {
 			return jsonResponse(
@@ -288,10 +290,10 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 		}
 
 		const folder = normalizeFolder(folderValue);
-		const filename = normalizeFilename(file.name);
+		const filename = isBackupRestore ? restoreKey.split('/').at(-1) ?? '' : normalizeFilename(file.name);
 		const conflict = CONFLICT_POLICIES.has(conflictValue) ? (conflictValue as ConflictPolicy) : null;
 
-		if (!folder) {
+		if (!isBackupRestore && !folder) {
 			return jsonResponse(
 				{
 					success: false,
@@ -301,7 +303,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			);
 		}
 
-		if (!filename) {
+		if (!filename || (isBackupRestore && !isImageKey(restoreKey))) {
 			return jsonResponse(
 				{
 					success: false,
@@ -345,18 +347,29 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			);
 		}
 
-		let key = `${folder}/${filename}`;
+		let key = isBackupRestore ? restoreKey : `${folder}/${filename}`;
 		let savedFilename = filename;
 		let renamed = false;
 		let overwritten = false;
 		const existing = await env.IMAGES.head(key);
 
-		if (conflict === 'reject' && existing && !isDeletedImage(existing)) {
+		if (isBackupRestore && conflictValue !== 'reject') {
+			return jsonResponse({ success: false, message: '备份恢复不支持覆盖或重命名。' }, 400);
+		}
+
+		if ((conflict === 'reject' || isBackupRestore) && existing && !isDeletedImage(existing)) {
 			return fileExistsResponse(key, existing, filename);
 		}
 
-		if (conflict === 'rename') {
-			const generated = await putWithGeneratedName(env.IMAGES, folder, filename, file);
+		if (isBackupRestore) {
+			const object = await putWithoutOverwrite(env.IMAGES, key, file);
+			if (!object) {
+				const latest = await env.IMAGES.head(key);
+				if (latest) return fileExistsResponse(key, latest, filename);
+				throw new Error('Conditional restore failed');
+			}
+		} else if (conflict === 'rename') {
+			const generated = await putWithGeneratedName(env.IMAGES, folder ?? '', filename, file);
 
 			if (!generated) {
 				return jsonResponse(
@@ -432,6 +445,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 			folder,
 			contentType: file.type,
 			size: file.size,
+			restored: isBackupRestore,
 			renamed,
 			overwritten,
 		});

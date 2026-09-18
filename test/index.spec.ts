@@ -37,6 +37,13 @@ async function uploadTestImage(
 	});
 }
 
+async function restoreBackupImage(key: string, content: number[], options: { conflict?: string } = {}): Promise<Response> {
+	const formData = new FormData();
+	formData.append('restore', 'backup-v1'); formData.append('restoreKey', key); formData.append('conflict', options.conflict ?? 'reject');
+	formData.append('file', new File([new Uint8Array([...pngSignature, ...content])], key.split('/').at(-1) ?? 'image.png', { type: 'image/png' }));
+	return ownerFetch('https://example.com/api/upload', { method: 'POST', body: formData });
+}
+
 afterEach(async () => {
 	await env.IMAGES.delete(testKeys);
 
@@ -148,6 +155,19 @@ describe('image center worker', () => {
 		const unchanged = await env.IMAGES.get(key);
 
 		expect([...new Uint8Array(await unchanged!.arrayBuffer())]).toEqual([9, 9, 9]);
+	});
+
+	it('restores a backup to its exact original path without overwrite or rename choices', async () => {
+		const key = `${uploadTestPrefix}nested/restored.png`;
+		const first = await restoreBackupImage(key, [1, 2, 3]);
+		expect(first.status).toBe(200); expect(await first.json()).toMatchObject({ success: true, key, restored: true, renamed: false, overwritten: false });
+		const duplicate = await restoreBackupImage(key, [9]);
+		expect(duplicate.status).toBe(409); expect(await duplicate.json()).toMatchObject({ code: 'FILE_EXISTS', key });
+		const object = await env.IMAGES.get(key); expect([...new Uint8Array(await object!.arrayBuffer())]).toEqual([...pngSignature, 1, 2, 3]);
+		const invalid = await restoreBackupImage('../outside.png', [1]);
+		expect(invalid.status).toBe(400);
+		const overwrite = await restoreBackupImage(`${uploadTestPrefix}other.png`, [1], { conflict: 'overwrite' });
+		expect(overwrite.status).toBe(400);
 	});
 
 	it('can keep both duplicate files by generating a unique timestamped name', async () => {

@@ -47,6 +47,16 @@
 
 				<div id="status" class="status"></div>
 			</section>
+
+			<section class="panel backup-panel" data-owner-only hidden>
+				<h2>从备份恢复</h2>
+				<p class="help-text">选择由 Image Center 导出的 ZIP 备份，先预览后再恢复。默认跳过同名图片，绝不会覆盖现有文件。</p>
+				<label class="backup-picker" for="backupInput">选择 ZIP 备份<input id="backupInput" type="file" accept=".zip,application/zip" /></label>
+				<p id="backupStatus" class="help-text" role="status"></p>
+				<div id="backupList" class="file-list" aria-label="备份图片预览"></div>
+				<button id="restoreButton" class="primary-button" type="button" disabled>恢复所选</button>
+				<div id="restoreStatus" class="status"></div>
+			</section>
 		</main>
 
 		<div id="conflictDialog" class="modal-backdrop" hidden>
@@ -79,6 +89,7 @@
 		</div>
 
 		<script src="/admin/auth.js"></script>
+		<script src="/admin/files/zip.js"></script>
 		<script src="/admin/app.js"></script>
 	</body>
 </html>

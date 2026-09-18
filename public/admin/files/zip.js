@@ -1,6 +1,7 @@
 (() => {
 	const encoder = new TextEncoder();
 	const MAX_BYTES = 50 * 1024 * 1024;
+	const MAX_FILES = 20;
 	const crcTable = new Uint32Array(256);
 	for (let value = 0; value < 256; value += 1) {
 		let crc = value;
@@ -54,6 +55,40 @@
 
 	function publicFailure(file, error) { return { key: String(file.key || ''), url: String(file.url || ''), reason: error?.message || '读取失败' }; }
 
+	function readUint16(bytes, offset) { return new DataView(bytes.buffer, bytes.byteOffset + offset, 2).getUint16(0, true); }
+	function readUint32(bytes, offset) { return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true); }
+	function decodeJson(bytes) { try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw archiveError('备份清单无法解析。', 'INVALID_MANIFEST'); } }
+
+	async function readBackup(archive) {
+		if (!(archive instanceof Blob)) throw archiveError('请选择 ZIP 备份文件。', 'INVALID_ARCHIVE');
+		if (!archive.size || archive.size > MAX_BYTES + 1024 * 1024) throw archiveError('备份文件为空或超过允许大小。', 'ARCHIVE_TOO_LARGE');
+		const bytes = new Uint8Array(await archive.arrayBuffer()); const entries = []; const names = new Set(); let offset = 0; let total = 0;
+		while (offset + 4 <= bytes.length && readUint32(bytes, offset) === 0x04034b50) {
+			if (offset + 30 > bytes.length) throw archiveError('ZIP 文件已损坏。', 'INVALID_ARCHIVE');
+			const flags = readUint16(bytes, offset + 6); const method = readUint16(bytes, offset + 8); const crc = readUint32(bytes, offset + 14); const size = readUint32(bytes, offset + 22); const nameLength = readUint16(bytes, offset + 26); const extraLength = readUint16(bytes, offset + 28); const start = offset + 30 + nameLength + extraLength; const end = start + size;
+			if ((flags & 1) || method !== 0 || end > bytes.length || entries.length > MAX_FILES) throw archiveError('仅支持由图片中心生成的未加密 ZIP 备份。', 'UNSUPPORTED_ARCHIVE');
+			const name = new TextDecoder().decode(bytes.slice(offset + 30, offset + 30 + nameLength)); const data = bytes.slice(start, end);
+			if (!name || names.has(name) || crc32(data) !== crc) throw archiveError('ZIP 条目无效或已损坏。', 'INVALID_ARCHIVE');
+			names.add(name); total += data.length; if (total > MAX_BYTES) throw archiveError('备份中的原图总大小超过 50 MB。', 'ARCHIVE_TOO_LARGE');
+			entries.push({ name, data }); offset = end;
+		}
+		const eocdOffset = bytes.length - 22;
+		if (!entries.length || !names.has('backup-manifest.json') || offset + 4 > eocdOffset || readUint32(bytes, offset) !== 0x02014b50
+			|| eocdOffset < offset || readUint32(bytes, eocdOffset) !== 0x06054b50 || readUint16(bytes, eocdOffset + 10) !== entries.length
+			|| readUint32(bytes, eocdOffset + 12) !== eocdOffset - offset || readUint32(bytes, eocdOffset + 16) !== offset || readUint16(bytes, eocdOffset + 20) !== 0) throw archiveError('未找到完整的图片中心备份清单。', 'INVALID_MANIFEST');
+		const manifestEntry = entries.find((entry) => entry.name === 'backup-manifest.json'); const manifest = decodeJson(manifestEntry.data);
+		if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.included) || manifest.included.length > MAX_FILES) throw archiveError('备份清单版本不受支持。', 'INVALID_MANIFEST');
+		const images = new Map(entries.filter((entry) => entry.name.startsWith('images/')).map((entry) => [entry.name.slice(7), entry]));
+		if (entries.some((entry) => entry.name !== 'backup-manifest.json' && !entry.name.startsWith('images/')) || images.size !== manifest.included.length) throw archiveError('备份文件包含未识别或不完整的内容。', 'INVALID_MANIFEST');
+		const files = manifest.included.map((record) => {
+			const key = safeKey(record?.key); const entry = images.get(key);
+			if (!entry || record.archivePath !== `images/${key}` || entry.data.length !== record.actualSize || entry.data.length > 10 * 1024 * 1024) throw archiveError('备份清单与图片内容不匹配。', 'INVALID_MANIFEST');
+			const filename = key.split('/').at(-1); const contentType = typeof record.contentType === 'string' ? record.contentType : '';
+			return { key, file: new File([entry.data], filename, { type: contentType }), size: entry.data.length, contentType };
+		});
+		return { manifest, files, totalBytes: total };
+	}
+
 	async function createZip(files, options = {}) {
 		if (!Array.isArray(files) || !files.length) throw archiveError('请选择至少一张图片。', 'EMPTY');
 		const fetchFn = options.fetchFn || globalThis.fetch; const signal = options.signal; const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : MAX_BYTES;
@@ -94,5 +129,5 @@
 		globalThis.setTimeout(() => globalThis.URL.revokeObjectURL(url), 1000);
 	}
 
-	globalThis.ImageZip = Object.freeze({ createZip, download, MAX_BYTES });
+	globalThis.ImageZip = Object.freeze({ createZip, download, readBackup, MAX_BYTES, MAX_FILES });
 })();

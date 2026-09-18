@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../public/admin/files/zip.js', import.meta.
 
 function setup(fetchFn) {
 	const window = {};
-	const context = vm.createContext({ window, TextEncoder, Uint8Array, Uint32Array, DataView, Blob, Response, Headers, DOMException, Date, setTimeout, location: { origin: 'https://img.sgao.cc' }, fetch: fetchFn });
+	const context = vm.createContext({ window, TextEncoder, TextDecoder, Uint8Array, Uint32Array, DataView, Blob, File, Response, Headers, DOMException, Date, setTimeout, location: { origin: 'https://img.sgao.cc' }, fetch: fetchFn });
 	vm.runInContext(source, context);
 	return context.ImageZip || window.ImageZip;
 }
@@ -48,4 +48,13 @@ test('超过实际原图大小限制或危险路径时不产生 ZIP', async () =
 	const zip = setup(() => new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } }));
 	await assert.rejects(zip.createZip([{ key: 'large.png', url: 'https://img.sgao.cc/large.png' }], { maxBytes: 2 }), /超过/);
 	await assert.rejects(zip.createZip([{ key: '../outside.png', url: 'https://img.sgao.cc/outside.png' }]), /路径无效/);
+});
+
+test('只接受本服务生成的备份并在本机恢复原路径与字节', async () => {
+	const zip = setup(() => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { 'content-type': 'image/png' } }));
+	const exported = await zip.createZip([{ key: 'travel/photo.png', url: 'https://img.sgao.cc/travel/photo.png', contentType: 'image/png' }]);
+	const backup = await zip.readBackup(exported.blob);
+	assert.equal(backup.files.length, 1); assert.equal(backup.files[0].key, 'travel/photo.png');
+	assert.deepEqual([...new Uint8Array(await backup.files[0].file.arrayBuffer())], [0x89, 0x50, 0x4e, 0x47]);
+	await assert.rejects(zip.readBackup(new Blob([new Uint8Array([1, 2, 3])])), /清单|ZIP/);
 });
