@@ -20,11 +20,21 @@ const managerStatus = document.querySelector('#managerStatus');
 const folderList = document.querySelector('#folderList');
 const loadMoreButton = document.querySelector('#loadMoreButton');
 const selectVisibleButton = document.querySelector('#selectVisibleButton');
+const exportVisibleButton = document.querySelector('#exportVisibleButton');
 const selectionBar = document.querySelector('#selectionBar');
 const selectedCount = document.querySelector('#selectedCount');
 const clearSelectionButton = document.querySelector('#clearSelectionButton');
 const batchDeleteButton = document.querySelector('#batchDeleteButton');
 const batchMoveButton = document.querySelector('#batchMoveButton');
+const batchExportButton = document.querySelector('#batchExportButton');
+const exportDialog = document.querySelector('#exportDialog');
+const exportForm = document.querySelector('#exportForm');
+const exportSummary = document.querySelector('#exportSummary');
+const exportList = document.querySelector('#exportList');
+const exportProgress = document.querySelector('#exportProgress');
+const exportError = document.querySelector('#exportError');
+const cancelExportButton = document.querySelector('#cancelExportButton');
+const confirmExportButton = document.querySelector('#confirmExportButton');
 const moveDialog = document.querySelector('#moveDialog');
 const moveForm = document.querySelector('#moveForm');
 const moveDirectory = document.querySelector('#moveDirectory');
@@ -83,6 +93,9 @@ let directoryOptionsSignature = '';
 let pendingMoveFiles = [];
 let moveFinished = false;
 let moveGeneration = 0;
+let pendingExportFiles = [];
+let exportController = null;
+let exportGeneration = 0;
 const fileNameCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 sortOrder.value = 'time-desc';
 
@@ -95,7 +108,7 @@ function switchView(nextTrashMode) {
 	cancelFileLoad();
 	listComplete = false; searchPaused = false;
 	files = []; cursor = null; selectedKeys.clear();
-	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeMoveDialog();
+	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeMoveDialog(); closeExportDialog(true);
 	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
 	trashFilesButton.setAttribute('aria-pressed', String(trashMode));
 	trashNotice.hidden = !trashMode;
@@ -108,6 +121,7 @@ function switchView(nextTrashMode) {
 }
 
 const MAX_BATCH_DELETE = 50;
+const MAX_EXPORT_FILES = 20;
 const collapsedFolders = new Set(readCollapsedFolders());
 
 refreshButton.addEventListener('click', () => { if (!operationBusy) return loadFiles({ reset: true }); });
@@ -134,9 +148,14 @@ searchControlButton.addEventListener('click', () => {
 	}
 });
 selectVisibleButton.addEventListener('click', toggleVisibleSelection);
+exportVisibleButton.addEventListener('click', () => openExportDialog('current'));
 clearSelectionButton.addEventListener('click', clearSelection);
 batchDeleteButton.addEventListener('click', () => openDeleteDialog([...selectedKeys]));
 batchMoveButton.addEventListener('click', openMoveDialog);
+batchExportButton.addEventListener('click', () => openExportDialog('selected'));
+cancelExportButton.addEventListener('click', cancelExport);
+exportForm.addEventListener('submit', exportSelectedFiles);
+exportDialog.addEventListener('click', (event) => { if (event.target === exportDialog) cancelExport(); });
 cancelMoveButton.addEventListener('click', () => closeMoveDialog());
 moveForm.addEventListener('submit', moveSelectedFiles);
 moveDirectory.addEventListener('change', updateMovePreview);
@@ -161,6 +180,10 @@ renameDialog.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+	if (!exportDialog.hidden) {
+		if (event.key === 'Escape') cancelExport();
+		return;
+	}
 	if (!moveDialog.hidden) {
 		if (event.key === 'Escape') closeMoveDialog();
 		if (event.key === 'Tab') {
@@ -664,12 +687,15 @@ function updateSelectionUI() {
 	selectedCount.textContent = `已选择 ${selectedKeys.size} 个文件`;
 	batchDeleteButton.textContent = `删除所选（${selectedKeys.size}）`;
 	batchMoveButton.textContent = `移动所选（${selectedKeys.size}）`;
+	batchExportButton.textContent = `导出所选（${selectedKeys.size}）`;
 	batchMoveButton.disabled = operationBusy;
+	batchExportButton.disabled = operationBusy;
 	batchDeleteButton.disabled = operationBusy;
 	clearSelectionButton.disabled = operationBusy;
 	selectVisibleButton.textContent =
 		allVisibleSelected || selectionAtLimit ? '取消当前选择' : renderedFiles.length > MAX_BATCH_DELETE ? '选择前 50 个' : '选择当前';
 	selectVisibleButton.disabled = operationBusy || renderedFiles.length === 0;
+	exportVisibleButton.disabled = operationBusy || renderedFiles.length === 0 || !listComplete;
 }
 
 function toggleVisibleSelection() {
@@ -704,6 +730,67 @@ function clearSelection() {
 	if (operationBusy) return;
 	selectedKeys.clear();
 	renderFiles();
+}
+
+function openExportDialog(scope) {
+	if (operationBusy || trashMode || !window.imageAccount.authorized) return;
+	if (scope === 'current' && !listComplete) { showToast('请先读取完整结果后再导出当前结果。'); return; }
+	const source = scope === 'selected' ? files.filter((file) => selectedKeys.has(file.key)) : renderedFiles;
+	if (!source.length) { showToast('没有可导出的图片。'); return; }
+	if (source.length > MAX_EXPORT_FILES) { showToast(`单次最多导出 ${MAX_EXPORT_FILES} 张图片，请先缩小筛选范围。`); return; }
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeMoveDialog();
+	pendingExportFiles = source.map((file) => ({ ...file })); exportGeneration += 1;
+	exportError.hidden = true; exportError.textContent = ''; exportProgress.textContent = '';
+	const expectedBytes = pendingExportFiles.reduce((total, file) => total + (Number(file.size) || 0), 0);
+	exportSummary.textContent = `${scope === 'selected' ? '所选' : '当前结果'}共 ${pendingExportFiles.length} 张，列表大小约 ${formatSize(expectedBytes)}。每次最多导出 20 张、50 MB 原图。`;
+	exportList.replaceChildren();
+	for (const file of pendingExportFiles) { const item = document.createElement('li'); item.textContent = `${file.key} · ${formatSize(file.size)}`; exportList.append(item); }
+	confirmExportButton.disabled = false; confirmExportButton.textContent = '开始下载'; cancelExportButton.disabled = false; cancelExportButton.textContent = '取消';
+	exportDialog.hidden = false; document.body.classList.add('modal-open'); confirmExportButton.focus();
+}
+
+function closeExportDialog(force = false) {
+	if (operationBusy && !force) return;
+	if (force) exportController?.abort();
+	exportGeneration += 1; exportController = null; pendingExportFiles = [];
+	exportDialog.hidden = true; exportList.replaceChildren(); exportSummary.textContent = ''; exportProgress.textContent = '';
+	exportError.hidden = true; exportError.textContent = ''; document.body.classList.remove('modal-open');
+}
+
+function cancelExport() {
+	if (exportController) {
+		exportController.abort(); operationBusy = false; closeExportDialog(true); setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles(); showToast('已取消导出。');
+		return;
+	}
+	closeExportDialog();
+}
+
+function exportFilename() {
+	const day = new Date().toISOString().slice(0, 10);
+	return `sgao-image-backup-${day}.zip`;
+}
+
+async function exportSelectedFiles(event) {
+	event.preventDefault();
+	if (operationBusy || !pendingExportFiles.length || !window.imageAccount.authorized) return;
+	if (!window.ImageZip?.createZip || !window.ImageZip?.download) { exportError.textContent = '当前浏览器不支持生成 ZIP 文件。'; exportError.hidden = false; return; }
+	const snapshot = pendingExportFiles.map((file) => ({ ...file })); const generation = exportGeneration; exportController = new AbortController();
+	operationBusy = true; confirmExportButton.disabled = true; confirmExportButton.textContent = '正在读取原图…'; cancelExportButton.textContent = '取消下载'; exportError.hidden = true; renderFiles();
+	try {
+		const result = await window.ImageZip.createZip(snapshot, { signal: exportController.signal, onProgress: (progress) => {
+			if (generation !== exportGeneration) return;
+			exportProgress.textContent = progress.phase === 'packing' ? '正在打包 ZIP…' : `正在读取 ${progress.index} / ${progress.total}：${progress.key}`;
+		} });
+		if (generation !== exportGeneration || !window.imageAccount.authorized) return;
+		window.ImageZip.download(result.blob, exportFilename());
+		const skipped = result.manifest?.failed?.length || 0;
+		operationBusy = false; exportController = null; closeExportDialog(); setLoading(loadingFiles); renderFiles(); showToast(skipped ? `已下载备份，${skipped} 张未能读取，详见清单。` : `已下载 ${snapshot.length} 张图片的备份。`);
+	} catch (error) {
+		if (generation !== exportGeneration || error?.name === 'AbortError') return;
+		exportError.textContent = error?.message || '导出失败，请重试。'; exportError.hidden = false; confirmExportButton.disabled = false; confirmExportButton.textContent = '重新下载';
+	} finally {
+		if (generation === exportGeneration) { operationBusy = false; exportController = null; setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles(); }
+	}
 }
 
 function openMoveDialog() {
@@ -1132,7 +1219,7 @@ window.addEventListener('image-auth-changed', (event) => {
 		directoryFilter.value = ''; formatFilter.value = ''; directoryScanRequested = false;
 		sortOrder.value = 'time-desc';
 		updateDirectoryOptions();
-		closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeMoveDialog(true);
+		closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
 	}
 });
 

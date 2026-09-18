@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest",
-    "test:auth-ui": "node --test test/auth-ui.test.mjs test/trash-ui.test.mjs test/search-ui.test.mjs",
+    "test:auth-ui": "node --test test/auth-ui.test.mjs test/trash-ui.test.mjs test/search-ui.test.mjs test/zip-ui.test.mjs",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {

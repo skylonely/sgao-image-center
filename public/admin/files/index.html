@@ -47,6 +47,7 @@
 					<div class="manager-meta">
 						<p id="fileCount" class="file-count" aria-live="polite"></p>
 						<button id="selectVisibleButton" class="toolbar-button" type="button">选择当前</button>
+						<button id="exportVisibleButton" class="toolbar-button" type="button">导出当前结果</button>
 					</div>
 				</div>
 
@@ -86,6 +87,7 @@
 					<span>单次最多选择 50 个</span>
 					<div class="selection-actions">
 						<button id="clearSelectionButton" class="toolbar-button" type="button">取消选择</button>
+						<button id="batchExportButton" class="toolbar-button" type="button">导出所选</button>
 						<button id="batchMoveButton" class="toolbar-button" type="button">移动所选</button>
 						<button id="batchDeleteButton" class="toolbar-button danger" type="button">删除所选</button>
 					</div>
@@ -137,6 +139,21 @@
 					</button>
 				</div>
 			</div>
+		</div>
+
+		<div id="exportDialog" class="modal-backdrop" hidden>
+			<form id="exportForm" class="delete-dialog move-dialog export-dialog" role="dialog" aria-modal="true" aria-labelledby="exportTitle" aria-describedby="exportWarning">
+				<h2 id="exportTitle">导出图片备份</h2>
+				<p id="exportWarning">将在本机浏览器中生成 ZIP，包含原图和 <code>backup-manifest.json</code> 清单；不会上传、修改或删除 R2 中的文件。</p>
+				<p id="exportSummary" class="move-summary" role="status" aria-live="polite"></p>
+				<ul id="exportList" class="move-results" aria-label="待导出文件"></ul>
+				<p id="exportProgress" class="move-summary" role="status" aria-live="polite"></p>
+				<p id="exportError" class="rename-error" role="alert" hidden></p>
+				<div class="dialog-actions">
+					<button id="cancelExportButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmExportButton" class="dialog-button primary-choice" type="submit">开始下载</button>
+				</div>
+			</form>
 		</div>
 
 		<div id="moveDialog" class="modal-backdrop" hidden>
@@ -201,6 +218,7 @@
 		<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 		<script src="/admin/auth.js"></script>
+		<script src="/admin/files/zip.js"></script>
 		<script src="/admin/files/files.js"></script>
 	</body>
 </html>

@@ -1206,6 +1206,7 @@ select:focus {
 }
 
 .move-dialog { width: min(620px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; }
+.export-dialog code { font-size: .88em; }
 .move-dialog h2 { margin-top: 0; }
 .move-dialog [hidden] { display: none; }
 .move-ack { display: flex; align-items: flex-start; gap: 9px; margin: 18px 0; color: #344054; font-size: 14px; }
