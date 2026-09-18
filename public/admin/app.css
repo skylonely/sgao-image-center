@@ -1205,6 +1205,18 @@ select:focus {
 	margin-top: 20px;
 }
 
+.move-dialog { width: min(620px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; }
+.move-dialog h2 { margin-top: 0; }
+.move-dialog [hidden] { display: none; }
+.move-ack { display: flex; align-items: flex-start; gap: 9px; margin: 18px 0; color: #344054; font-size: 14px; }
+.move-ack input { flex: none; width: 18px; height: 18px; margin: 2px 0 0; }
+.move-dialog .help-text { margin-top: 8px; font-size: 12px; }
+.move-dialog .move-summary { margin-top: 12px; color: #344054; }
+.move-results { padding: 0; margin: 12px 0 0; list-style: none; max-height: 240px; overflow-y: auto; }
+.move-results li { padding: 10px 0; border-bottom: 1px solid #eaecf0; overflow-wrap: anywhere; font-size: 13px; color: #475467; }
+.move-results li[data-state="failed"] { color: #b42318; }
+.move-results li[data-state="moved"] { color: #027a48; }
+
 .rename-error {
 	margin-top: 8px !important;
 	color: #b42318 !important;

@@ -1,5 +1,6 @@
 import { authorizeImageRequest } from '../auth';
 import { isDeletedImage, isImageKey, isTrashKey, moveToTrash, TrashError } from '../trash';
+import { moveImage, MoveError } from '../move';
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
@@ -42,6 +43,7 @@ function fileRecord(object: R2Object, key = object.key) {
 		contentType: object.httpMetadata?.contentType ?? 'application/octet-stream',
 		originalFilename: object.customMetadata?.originalFilename ?? null,
 		etag: object.etag,
+		version: object.version,
 	};
 }
 
@@ -375,6 +377,47 @@ async function renameFile(request: Request, env: Env): Promise<Response> {
 	}
 }
 
+async function moveFiles(request: Request, env: Env): Promise<Response> {
+	let body: unknown;
+	try { body = await request.json(); } catch { return jsonResponse({ success: false, message: '无效的 JSON。' }, 400); }
+	if (typeof body !== 'object' || body === null || !('action' in body) || body.action !== 'move'
+		|| !('directory' in body) || typeof body.directory !== 'string' || !('files' in body) || !Array.isArray(body.files)) {
+		return jsonResponse({ success: false, message: '无效的移动请求。' }, 400);
+	}
+	const directory = body.directory.trim();
+	if (directory && (!isImageKey(`${directory}/placeholder.png`) || ['admin', 'api'].includes(directory.split('/')[0]))) {
+		return jsonResponse({ success: false, message: '目录无效：请勿使用空路径段、点路径或系统保留目录。' }, 400);
+	}
+	if (!body.files.length || body.files.length > 50) return jsonResponse({ success: false, message: '单次请选择 1 至 50 张图片。' }, 400);
+	const entries: { key: string; expectedEtag: string; expectedVersion?: string; targetKey: string }[] = [];
+	const keys = new Set<string>();
+	for (const item of body.files) {
+		if (typeof item !== 'object' || item === null || typeof item.key !== 'string' || !isValidKey(item.key)
+			|| typeof item.expectedEtag !== 'string' || !/^[a-f0-9]{32}(?:-[0-9]+)?$/i.test(item.expectedEtag)
+			|| (item.expectedVersion !== undefined && (typeof item.expectedVersion !== 'string' || !item.expectedVersion)) || keys.has(item.key)) {
+			return jsonResponse({ success: false, message: '图片路径或版本无效，请刷新后重新选择。' }, 400);
+		}
+		keys.add(item.key);
+		const targetKey = directory ? `${directory}/${filenameFromKey(item.key)}` : filenameFromKey(item.key);
+		if (!isValidKey(targetKey) || ['admin', 'api'].includes(targetKey.split('/')[0])) return jsonResponse({ success: false, message: '目标图片路径无效或过长。' }, 400);
+		entries.push({ key: item.key, expectedEtag: item.expectedEtag, expectedVersion: item.expectedVersion, targetKey });
+	}
+	const moved: { previousKey: string; file: ReturnType<typeof fileRecord> }[] = [];
+	const skipped: { key: string }[] = [];
+	const failed: { key: string; message: string; copiedFile?: ReturnType<typeof fileRecord> }[] = [];
+	for (const entry of entries) {
+		try {
+			const result = await moveImage(env.IMAGES, entry.key, entry.targetKey, entry.expectedEtag, entry.expectedVersion);
+			if (result.skipped) skipped.push({ key: entry.key });
+			else moved.push({ previousKey: entry.key, file: fileRecord(result.file, entry.targetKey) });
+		} catch (error) {
+			failed.push({ key: entry.key, message: error instanceof MoveError ? error.message : '移动失败，请刷新检查。',
+				...(error instanceof MoveError && error.copied ? { copiedFile: fileRecord(error.copied, entry.targetKey) } : {}) });
+		}
+	}
+	return jsonResponse({ success: true, moved, skipped, failed });
+}
+
 export async function handleFiles(request: Request, env: Env): Promise<Response> {
 	const identity = await authorizeImageRequest(request, env);
 	if (identity instanceof Response) return identity;
@@ -394,12 +437,14 @@ export async function handleFiles(request: Request, env: Env): Promise<Response>
 
 			case 'PATCH':
 				return renameFile(request, env);
+			case 'POST':
+				return moveFiles(request, env);
 
 			default:
 				return jsonResponse(
 					{ success: false, message: 'Method Not Allowed' },
 					405,
-					{ Allow: 'GET, PATCH, DELETE' },
+					{ Allow: 'GET, POST, PATCH, DELETE' },
 				);
 		}
 }

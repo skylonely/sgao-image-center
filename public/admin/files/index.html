@@ -86,6 +86,7 @@
 					<span>单次最多选择 50 个</span>
 					<div class="selection-actions">
 						<button id="clearSelectionButton" class="toolbar-button" type="button">取消选择</button>
+						<button id="batchMoveButton" class="toolbar-button" type="button">移动所选</button>
 						<button id="batchDeleteButton" class="toolbar-button danger" type="button">删除所选</button>
 					</div>
 				</div>
@@ -136,6 +137,26 @@
 					</button>
 				</div>
 			</div>
+		</div>
+
+		<div id="moveDialog" class="modal-backdrop" hidden>
+			<form id="moveForm" class="delete-dialog move-dialog" role="dialog" aria-modal="true" aria-labelledby="moveTitle" aria-describedby="moveWarning">
+				<h2 id="moveTitle">批量移动目录</h2>
+				<p id="moveWarning">移动后图片链接会变化，网页和文档中的旧引用可能失效。不会自动修改引用，也不会覆盖同名图片；浏览器缓存的旧图可能暂时仍可见。</p>
+				<label class="rename-label" for="moveDirectory">目标目录</label>
+				<select id="moveDirectory"><option value="">请选择目录</option></select>
+				<label id="moveNewDirectoryLabel" class="rename-label" for="moveNewDirectory" hidden>新目录（使用 / 分隔多级目录）</label>
+				<input id="moveNewDirectory" type="text" autocomplete="off" maxlength="1024" placeholder="例如 travel/2026" hidden />
+				<p id="moveDirectoryHint" class="help-text"></p>
+				<label class="move-ack"><input id="moveAcknowledged" type="checkbox" />我已了解链接会变化，并确认移动。</label>
+				<p id="moveError" class="rename-error" role="alert" hidden></p>
+				<p id="moveSummary" class="move-summary" role="status" aria-live="polite"></p>
+				<ul id="moveResults" class="move-results" aria-label="逐张移动结果"></ul>
+				<div class="dialog-actions">
+					<button id="cancelMoveButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmMoveButton" class="dialog-button primary-choice" type="submit">确认移动</button>
+				</div>
+			</form>
 		</div>
 
 		<div id="renameDialog" class="modal-backdrop" hidden>

@@ -289,6 +289,128 @@ test('directory completion can pause and resume without a keyword or filter', as
 });
 
 const sortBy = (h, mode) => { h.nodes.get('#sortOrder').value = mode; h.nodes.get('#sortOrder').handlers.get('change')(); };
+const moveSubmit = (h) => h.nodes.get('#moveForm').handlers.get('submit')({ preventDefault() {} });
+const chooseMoveDirectory = (h, value) => { h.nodes.get('#moveDirectory').value = value; h.nodes.get('#moveDirectory').handlers.get('change')(); };
+
+test('move controls require owner selection, show root and existing/new directories, and never write before confirmation', async () => {
+	const h = harness(async () => page([{ ...file('travel/a.png'), etag: 'a'.repeat(32), version: 'version-a' }, file('docs/guides/b.png')]));
+	await h.run('loadFiles({reset:true})'); h.nodes.get('#moveDialog').hidden = true;
+	h.run('openMoveDialog()'); assert.equal(h.nodes.get('#moveDialog').hidden, true);
+	h.run("selectedKeys.add('travel/a.png'); openMoveDialog()"); assert.equal(h.nodes.get('#moveDialog').hidden, false);
+	assert.deepEqual(h.nodes.get('#moveDirectory').children.map(option => option.value), ['', 'root', 'dir:docs', 'dir:docs/guides', 'dir:travel', 'new']);
+	chooseMoveDirectory(h, 'new'); assert.equal(h.nodes.get('#moveNewDirectory').hidden, false);
+	h.nodes.get('#moveNewDirectory').value = '旅行/2026'; h.nodes.get('#moveNewDirectory').handlers.get('input')();
+	assert.match(h.nodes.get('#moveResults').children[0].textContent, /travel\/a.png → 旅行\/2026\/a.png/);
+	await moveSubmit(h); assert.equal(h.requests.length, 1); assert.match(h.nodes.get('#moveError').textContent, /勾选/);
+	h.nodes.get('#moveAcknowledged').checked = true; chooseMoveDirectory(h, 'root');
+	assert.equal(h.nodes.get('#moveAcknowledged').checked, false); assert.match(h.nodes.get('#moveResults').children[0].textContent, /→ a.png/);
+	h.run('closeMoveDialog()'); assert.equal(h.nodes.get('#moveDialog').hidden, true);
+	assert.equal(h.requests.length, 1);
+});
+
+test('batch move sends only the captured selected files and versions, updates keys, and retains failed selection with per-file results', async () => {
+	const a = { ...file('old/a.png'), etag: 'a'.repeat(32), version: 'v-a' }, b = { ...file('old/b.png'), etag: 'b'.repeat(32) }, stay = { ...file('new/c.png'), etag: 'c'.repeat(32) };
+	const h = harness(async (_, options) => options?.method === 'POST' ? Response.json({ success: true, moved: [{ previousKey: a.key, file: file('new/a.png') }], skipped: [{ key: stay.key }], failed: [{ key: b.key, message: '目标已存在' }] }) : page([a, b, stay, file('unselected.png')]));
+	await h.run('loadFiles({reset:true})'); h.run("selectedKeys = new Set(['old/a.png', 'old/b.png', 'new/c.png']); openMoveDialog()");
+	chooseMoveDirectory(h, 'dir:new'); h.nodes.get('#moveAcknowledged').checked = true; await moveSubmit(h);
+	const body = JSON.parse(h.requests[1].options.body);
+	assert.equal(body.action, 'move'); assert.equal(body.directory, 'new'); assert.equal(body.files.length, 3);
+	assert.deepEqual(body.files[0], { key: a.key, expectedEtag: a.etag, expectedVersion: a.version });
+	assert.equal(h.run("files.some(file => file.key === 'old/a.png')"), false);
+	assert.equal(h.run("files.some(file => file.key === 'new/a.png')"), true);
+	assert.equal(h.run("[...selectedKeys].join(',')"), 'old/b.png');
+	assert.deepEqual(h.nodes.get('#moveResults').children.map(item => item.attrs['data-state']), ['moved', 'failed', 'skipped']);
+	assert.match(h.nodes.get('#moveSummary').textContent, /已移动 1 张.*跳过 1 张.*未完成 1 张/);
+	assert.equal(h.nodes.get('#confirmMoveButton').hidden, true); assert.equal(h.run('cursor'), null); assert.equal(h.run('listComplete'), false);
+	await moveSubmit(h); assert.equal(h.requests.length, 2); // no duplicate submission after results
+});
+
+test('copy-only move failure keeps the original selected and exposes the preserved destination without claiming it moved', async () => {
+	const h = harness(async (_, options) => options?.method === 'POST' ? Response.json({ success: true, moved: [], skipped: [], failed: [{ key: 'old/a.png', message: '目标副本已保留，请刷新检查。', copiedFile: file('new/a.png') }] }) : page([{ ...file('old/a.png'), etag: 'a'.repeat(32) }]));
+	await h.run('loadFiles({reset:true})'); h.run("selectedKeys.add('old/a.png'); openMoveDialog()");
+	chooseMoveDirectory(h, 'new'); h.nodes.get('#moveNewDirectory').value = 'new'; h.nodes.get('#moveAcknowledged').checked = true;
+	await moveSubmit(h);
+	assert.equal(h.run('files.length'), 2); assert.equal(h.run("selectedKeys.has('old/a.png')"), true);
+	assert.match(h.nodes.get('#moveResults').children[0].textContent, /未完成.*副本已保留/);
+	assert.match(h.nodes.get('#moveSummary').textContent, /已移动 0 张/);
+});
+
+test('move blocks duplicate submits, closing, selection changes, refresh and view switches while the request is running', async () => {
+	let resolve;
+	const pending = new Promise(done => { resolve = done; });
+	const h = harness(async (_, options) => options?.method === 'POST' ? pending : page([{ ...file('old/a.png'), etag: 'a'.repeat(32) }]));
+	await h.run('loadFiles({reset:true})');
+	h.run("var bodyClasses = new Set(); document.body.classList = { add(value) { bodyClasses.add(value); }, remove(value) { bodyClasses.delete(value); } }; selectedKeys.add('old/a.png'); openMoveDialog()");
+	chooseMoveDirectory(h, 'root'); h.nodes.get('#moveAcknowledged').checked = true;
+	const moving = moveSubmit(h); await tick(); await moveSubmit(h);
+	h.run('closeMoveDialog(); clearSelection(); toggleVisibleSelection(); switchView(true)');
+	h.nodes.get('#refreshButton').handlers.get('click')();
+	assert.equal(h.requests.length, 2); assert.equal(h.run('trashMode'), false); assert.equal(h.run('selectedKeys.size'), 1);
+	assert.equal(h.nodes.get('#moveDialog').hidden, false); assert.equal(h.nodes.get('#cancelMoveButton').disabled, true);
+	assert.equal(h.run("bodyClasses.has('modal-open')"), true);
+	resolve(Response.json({ success: true, moved: [{ previousKey: 'old/a.png', file: file('a.png') }], skipped: [], failed: [] })); await moving;
+	assert.equal(h.run('operationBusy'), false); assert.equal(h.nodes.get('#cancelMoveButton').disabled, false);
+	assert.equal(h.run("bodyClasses.has('modal-open')"), true); h.run('closeMoveDialog()'); assert.equal(h.run("bodyClasses.has('modal-open')"), false);
+});
+
+test('uncertain move request failure retains selection, resets pagination and requires refresh rather than blind resubmission', async () => {
+	const h = harness(async (_, options) => { if (options?.method === 'POST') throw new Error('网络中断'); return page([{ ...file('old/a.png'), etag: 'a'.repeat(32) }], 'next'); });
+	await h.run('loadFiles({reset:true})'); h.run("selectedKeys.add('old/a.png'); openMoveDialog()"); chooseMoveDirectory(h, 'root'); h.nodes.get('#moveAcknowledged').checked = true;
+	await moveSubmit(h); assert.match(h.nodes.get('#moveError').textContent, /网络中断.*勿直接重复提交/);
+	assert.equal(h.run('selectedKeys.size'), 1); assert.equal(h.run('cursor'), null);
+	await moveSubmit(h); assert.equal(h.requests.length, 2);
+});
+
+test('logout closes and clears the move dialog and ignores a late move response even after authorization is restored', async () => {
+	let resolve; const pending = new Promise(done => { resolve = done; });
+	const h = harness(async (_, options) => options?.method === 'POST' ? pending : page([{ ...file('old/a.png'), etag: 'a'.repeat(32) }]));
+	await h.run('loadFiles({reset:true})'); h.run("selectedKeys.add('old/a.png'); openMoveDialog()"); chooseMoveDirectory(h, 'root'); h.nodes.get('#moveAcknowledged').checked = true;
+	const moving = moveSubmit(h); await tick(); h.window.imageAccount.authorized = false;
+	h.events.get('image-auth-changed')({ detail: { authorized: false } });
+	assert.equal(h.nodes.get('#moveDialog').hidden, true); assert.equal(h.nodes.get('#moveResults').children.length, 0);
+	h.window.imageAccount.authorized = true;
+	resolve(Response.json({ success: true, moved: [{ previousKey: 'old/a.png', file: file('a.png') }], skipped: [], failed: [] })); await moving;
+	assert.equal(h.run('files.length'), 0); assert.equal(h.run('operationBusy'), false); assert.equal(h.nodes.get('#moveDialog').hidden, true);
+});
+
+test('moving cancels an incomplete sorting scan and a late page cannot restore the old path', async () => {
+	let resolve; const pending = new Promise(done => { resolve = done; });
+	const h = harness(async (_, options) => options?.method === 'POST' ? Response.json({ success: true, moved: [{ previousKey: 'old/a.png', file: file('a.png') }], skipped: [], failed: [] }) : h.requests.length === 1 ? page([{ ...file('old/a.png'), etag: 'a'.repeat(32) }], 'next') : pending, null);
+	const loading = h.run('loadFiles({reset:true})'); await tick(); h.run("selectedKeys.add('old/a.png'); openMoveDialog()");
+	chooseMoveDirectory(h, 'root'); h.nodes.get('#moveAcknowledged').checked = true; await moveSubmit(h);
+	assert.equal(h.requests[1].options.signal.aborted, true);
+	resolve(page([file('old/a.png'), file('late.png')])); await loading;
+	assert.equal(h.run("files.some(file => file.key === 'old/a.png')"), false); assert.equal(h.run("files.some(file => file.key === 'late.png')"), false);
+});
+
+test('move results render hostile filenames and messages as text, not HTML', async () => {
+	const key = 'old/<img src=x>.png';
+	const h = harness(async (_, options) => options?.method === 'POST' ? Response.json({ success: true, moved: [], skipped: [], failed: [{ key, message: '<script>alert(1)</script>' }] }) : page([{ ...file(key), etag: 'a'.repeat(32) }]));
+	await h.run('loadFiles({reset:true})'); h.run("selectedKeys.add(files[0].key); openMoveDialog()"); chooseMoveDirectory(h, 'root'); h.nodes.get('#moveAcknowledged').checked = true;
+	await moveSubmit(h); const item = h.nodes.get('#moveResults').children[0];
+	assert.match(item.textContent, /<script>/); assert.equal(item.innerHTML, undefined);
+});
+
+test('invalid local directories never send a move request; server validation errors allow correction and fresh confirmation', async () => {
+	let calls = 0;
+	const h = harness(async (_, options) => options?.method === 'POST' ? (++calls === 1 ? Response.json({ success: false, message: '目标路径过长' }, { status: 400 }) : Response.json({ success: true, moved: [{ previousKey: 'old/a.png', file: file('new/a.png') }], skipped: [], failed: [] })) : page([{ ...file('old/a.png'), etag: 'a'.repeat(32) }]));
+	await h.run('loadFiles({reset:true})'); h.run("selectedKeys.add('old/a.png'); openMoveDialog()"); chooseMoveDirectory(h, 'new');
+	for (const directory of ['../escape', 'a//b', '/leading', 'admin', 'api/files', '__sgao_trash/data', 'a\\b']) {
+		h.nodes.get('#moveNewDirectory').value = directory; h.nodes.get('#moveAcknowledged').checked = true; await moveSubmit(h);
+	}
+	assert.equal(h.requests.length, 1);
+	h.nodes.get('#moveNewDirectory').value = 'new'; h.nodes.get('#moveAcknowledged').checked = true; await moveSubmit(h);
+	assert.match(h.nodes.get('#moveError').textContent, /过长/); assert.equal(h.run('moveFinished'), false);
+	assert.equal(h.nodes.get('#moveDirectory').disabled, false); assert.equal(h.nodes.get('#moveAcknowledged').checked, false);
+	await moveSubmit(h); assert.equal(h.requests.length, 2);
+	h.nodes.get('#moveAcknowledged').checked = true; await moveSubmit(h); assert.equal(h.requests.length, 3);
+});
+
+test('batch move dialog is not available in trash or without authorization', async () => {
+	const h = harness(async () => page([file('a.png')])); await h.run('loadFiles({reset:true})');
+	h.nodes.get('#moveDialog').hidden = true; h.run("selectedKeys.add('a.png'); trashMode = true; openMoveDialog()"); assert.equal(h.nodes.get('#moveDialog').hidden, true);
+	h.run('trashMode = false'); h.window.imageAccount.authorized = false; h.run('openMoveDialog()'); assert.equal(h.nodes.get('#moveDialog').hidden, true);
+});
 
 test('default latest-upload order reads all pages and places the newest image first across directories', async () => {
 	const old = { ...file('a/old.png'), uploaded: '2026-09-16' };

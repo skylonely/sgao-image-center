@@ -24,6 +24,19 @@ const selectionBar = document.querySelector('#selectionBar');
 const selectedCount = document.querySelector('#selectedCount');
 const clearSelectionButton = document.querySelector('#clearSelectionButton');
 const batchDeleteButton = document.querySelector('#batchDeleteButton');
+const batchMoveButton = document.querySelector('#batchMoveButton');
+const moveDialog = document.querySelector('#moveDialog');
+const moveForm = document.querySelector('#moveForm');
+const moveDirectory = document.querySelector('#moveDirectory');
+const moveNewDirectory = document.querySelector('#moveNewDirectory');
+const moveNewDirectoryLabel = document.querySelector('#moveNewDirectoryLabel');
+const moveDirectoryHint = document.querySelector('#moveDirectoryHint');
+const moveAcknowledged = document.querySelector('#moveAcknowledged');
+const moveError = document.querySelector('#moveError');
+const moveSummary = document.querySelector('#moveSummary');
+const moveResults = document.querySelector('#moveResults');
+const cancelMoveButton = document.querySelector('#cancelMoveButton');
+const confirmMoveButton = document.querySelector('#confirmMoveButton');
 const deleteDialog = document.querySelector('#deleteDialog');
 const deleteTitle = document.querySelector('#deleteTitle');
 const deleteDescription = document.querySelector('#deleteDescription');
@@ -67,6 +80,9 @@ let searchTimer = null;
 let searchPaused = false;
 let directoryScanRequested = false;
 let directoryOptionsSignature = '';
+let pendingMoveFiles = [];
+let moveFinished = false;
+let moveGeneration = 0;
 const fileNameCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 sortOrder.value = 'time-desc';
 
@@ -79,7 +95,7 @@ function switchView(nextTrashMode) {
 	cancelFileLoad();
 	listComplete = false; searchPaused = false;
 	files = []; cursor = null; selectedKeys.clear();
-	closeImagePreview(); closeDeleteDialog(); closeRenameDialog();
+	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeMoveDialog();
 	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
 	trashFilesButton.setAttribute('aria-pressed', String(trashMode));
 	trashNotice.hidden = !trashMode;
@@ -120,6 +136,12 @@ searchControlButton.addEventListener('click', () => {
 selectVisibleButton.addEventListener('click', toggleVisibleSelection);
 clearSelectionButton.addEventListener('click', clearSelection);
 batchDeleteButton.addEventListener('click', () => openDeleteDialog([...selectedKeys]));
+batchMoveButton.addEventListener('click', openMoveDialog);
+cancelMoveButton.addEventListener('click', () => closeMoveDialog());
+moveForm.addEventListener('submit', moveSelectedFiles);
+moveDirectory.addEventListener('change', updateMovePreview);
+moveNewDirectory.addEventListener('input', updateMovePreview);
+moveDialog.addEventListener('click', (event) => { if (event.target === moveDialog) closeMoveDialog(); });
 
 cancelDeleteButton.addEventListener('click', closeDeleteDialog);
 confirmDeleteButton.addEventListener('click', deleteFile);
@@ -139,6 +161,17 @@ renameDialog.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+	if (!moveDialog.hidden) {
+		if (event.key === 'Escape') closeMoveDialog();
+		if (event.key === 'Tab') {
+			const controls = [...moveForm.querySelectorAll('button:not(:disabled), select:not(:disabled), input:not(:disabled)')].filter((control) => !control.hidden);
+			if (!controls.length) { event.preventDefault(); return; }
+			const first = controls[0], last = controls.at(-1);
+			if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+			else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+		}
+		return;
+	}
 	if (!imagePreview.hidden) {
 		if (event.key === 'Escape') {
 			closeImagePreview();
@@ -556,8 +589,10 @@ function createFileRow(file) {
 	selectLabel.title = `选择 ${file.filename}`;
 	checkbox.type = 'checkbox';
 	checkbox.checked = selectedKeys.has(file.key);
+	checkbox.disabled = operationBusy;
 	checkbox.setAttribute('aria-label', `选择 ${file.filename}`);
 	checkbox.addEventListener('change', () => {
+		if (operationBusy) return;
 		if (checkbox.checked) {
 			if (selectedKeys.size >= MAX_BATCH_DELETE) {
 				checkbox.checked = false;
@@ -628,12 +663,17 @@ function updateSelectionUI() {
 	selectionBar.hidden = trashMode || selectedKeys.size === 0;
 	selectedCount.textContent = `已选择 ${selectedKeys.size} 个文件`;
 	batchDeleteButton.textContent = `删除所选（${selectedKeys.size}）`;
+	batchMoveButton.textContent = `移动所选（${selectedKeys.size}）`;
+	batchMoveButton.disabled = operationBusy;
+	batchDeleteButton.disabled = operationBusy;
+	clearSelectionButton.disabled = operationBusy;
 	selectVisibleButton.textContent =
 		allVisibleSelected || selectionAtLimit ? '取消当前选择' : renderedFiles.length > MAX_BATCH_DELETE ? '选择前 50 个' : '选择当前';
-	selectVisibleButton.disabled = renderedFiles.length === 0;
+	selectVisibleButton.disabled = operationBusy || renderedFiles.length === 0;
 }
 
 function toggleVisibleSelection() {
+	if (operationBusy) return;
 	const visibleKeys = renderedFiles.map((file) => file.key);
 	const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.has(key));
 	const selectedVisibleCount = visibleKeys.filter((key) => selectedKeys.has(key)).length;
@@ -661,8 +701,125 @@ function toggleVisibleSelection() {
 }
 
 function clearSelection() {
+	if (operationBusy) return;
 	selectedKeys.clear();
 	renderFiles();
+}
+
+function openMoveDialog() {
+	if (operationBusy || trashMode || !window.imageAccount.authorized || !selectedKeys.size) return;
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog();
+	pendingMoveFiles = files.filter((file) => selectedKeys.has(file.key)).map((file) => ({ ...file }));
+	if (!pendingMoveFiles.length || pendingMoveFiles.length > 50) return;
+	moveGeneration += 1; moveFinished = false;
+	const directories = new Set();
+	for (const file of files) {
+		const parts = file.key.split('/'); parts.pop();
+		for (let depth = 1; depth <= parts.length; depth += 1) directories.add(parts.slice(0, depth).join('/'));
+	}
+	moveDirectory.replaceChildren();
+	for (const [value, text] of [['', '请选择目录'], ['root', '根目录'], ...[...directories].sort((a, b) => a.localeCompare(b, 'zh-CN')).map((folder) => [`dir:${folder}`, folder]), ['new', '新建目录…']]) {
+		const option = document.createElement('option'); option.value = value; option.textContent = text; moveDirectory.append(option);
+	}
+	moveDirectory.value = ''; moveNewDirectory.value = ''; moveAcknowledged.checked = false;
+	moveDirectory.disabled = false; moveNewDirectory.disabled = false; moveAcknowledged.disabled = false;
+	confirmMoveButton.disabled = false; confirmMoveButton.hidden = false; confirmMoveButton.textContent = '确认移动';
+	cancelMoveButton.disabled = false; cancelMoveButton.textContent = '取消';
+	moveError.hidden = true; moveError.textContent = ''; moveSummary.textContent = '';
+	moveDirectoryHint.textContent = listComplete ? '目录已完整读取。' : '目录选项来自已读取的图片；也可输入任何新目录。';
+	updateMovePreview(); moveDialog.hidden = false;
+	document.body.classList.add('modal-open'); moveDirectory.focus();
+}
+
+function moveDestination() {
+	return moveDirectory.value === 'root' ? '' : moveDirectory.value === 'new' ? moveNewDirectory.value.trim() : moveDirectory.value.startsWith('dir:') ? moveDirectory.value.slice(4) : null;
+}
+
+function updateMovePreview() {
+	if (operationBusy || moveFinished) return;
+	moveNewDirectory.hidden = moveNewDirectoryLabel.hidden = moveDirectory.value !== 'new';
+	moveAcknowledged.checked = false;
+	const directory = moveDestination();
+	moveResults.replaceChildren();
+	for (const file of pendingMoveFiles) {
+		const item = document.createElement('li');
+		const target = directory === null || (moveDirectory.value === 'new' && !directory) ? '请选择目标目录' : directory ? `${directory}/${file.key.split('/').at(-1)}` : file.key.split('/').at(-1);
+		item.textContent = `${file.key} → ${target}`; moveResults.append(item);
+	}
+}
+
+function closeMoveDialog(force = false) {
+	if (operationBusy && !force) return;
+	moveGeneration += 1; pendingMoveFiles = []; moveFinished = false;
+	moveDialog.hidden = true; moveResults.replaceChildren(); moveSummary.textContent = '';
+	moveError.hidden = true; moveError.textContent = ''; moveAcknowledged.checked = false;
+	moveNewDirectory.value = ''; moveDirectory.value = '';
+	document.body.classList.remove('modal-open');
+	if (window.imageAccount.authorized && batchMoveButton.isConnected) batchMoveButton.focus();
+}
+
+async function moveSelectedFiles(event) {
+	event.preventDefault();
+	if (operationBusy || moveFinished || !pendingMoveFiles.length || !window.imageAccount.authorized) return;
+	const directory = moveDestination();
+	if (directory === null || (moveDirectory.value === 'new' && !directory) || !moveAcknowledged.checked) {
+		moveError.textContent = '请选择目标目录，并勾选链接变化确认。'; moveError.hidden = false; return;
+	}
+	if (directory && (directory.includes('\\') || /[\u0000-\u001f\u007f]/.test(directory)
+		|| directory.split('/').some((part) => !part || part === '.' || part === '..') || ['admin', 'api', '__sgao_trash'].includes(directory.split('/')[0]))) {
+		moveError.textContent = '目录无效，请勿使用空路径段、点路径或系统保留目录。'; moveError.hidden = false; return;
+	}
+	const snapshot = pendingMoveFiles.map((file) => ({ ...file }));
+	const generation = moveGeneration;
+	operationBusy = true; cancelFileLoad(); searchPaused = true;
+	confirmMoveButton.disabled = true; confirmMoveButton.textContent = '移动中…'; cancelMoveButton.disabled = true;
+	moveDirectory.disabled = true; moveNewDirectory.disabled = true; moveAcknowledged.disabled = true;
+	moveError.hidden = true; moveSummary.textContent = `正在处理 ${snapshot.length} 张图片，请勿关闭页面。`;
+	renderFiles();
+	try {
+		const result = await requestFiles('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'move', directory, files: snapshot.map((file) => ({ key: file.key, expectedEtag: file.etag, expectedVersion: file.version })) }) });
+		if (generation !== moveGeneration || !window.imageAccount.authorized) return;
+		if (!Array.isArray(result.moved) || !Array.isArray(result.failed) || !Array.isArray(result.skipped)) throw new Error('移动结果无法解析，请刷新检查两个目录后再操作。');
+		const moved = new Map(result.moved.map((entry) => [entry.previousKey, entry.file]));
+		const skipped = new Set(result.skipped.map((entry) => entry.key));
+		const failed = new Map(result.failed.map((entry) => [entry.key, entry]));
+		const updated = new Map(files.filter((file) => !moved.has(file.key)).map((file) => [file.key, file]));
+		for (const file of moved.values()) updated.set(file.key, file);
+		for (const failure of failed.values()) if (failure.copiedFile) updated.set(failure.copiedFile.key, failure.copiedFile);
+		files = [...updated.values()];
+		for (const file of snapshot) if (moved.has(file.key) || skipped.has(file.key)) selectedKeys.delete(file.key);
+		// Moving keys changes pagination positions; restart metadata scanning from the beginning.
+		cursor = null; listComplete = false;
+		moveResults.replaceChildren();
+		for (const file of snapshot) {
+			const item = document.createElement('li');
+			const state = moved.has(file.key) ? 'moved' : skipped.has(file.key) ? 'skipped' : 'failed';
+			item.setAttribute('data-state', state);
+			const target = directory ? `${directory}/${file.key.split('/').at(-1)}` : file.key.split('/').at(-1);
+			item.textContent = state === 'moved' ? `已移动：${file.key} → ${moved.get(file.key).key}` : state === 'skipped' ? `未移动：${file.key}（已在目标目录）` : `未完成：${file.key} → ${failed.get(file.key)?.copiedFile?.key || target} — ${failed.get(file.key)?.message || '结果未确认，请刷新检查。'}`;
+			moveResults.append(item);
+		}
+		moveFinished = true; confirmMoveButton.hidden = true; cancelMoveButton.textContent = '关闭';
+		moveSummary.textContent = `已移动 ${moved.size} 张，原目录跳过 ${skipped.size} 张，未完成 ${failed.size} 张。未完成项保持勾选；请检查结果后刷新列表。`;
+	} catch (error) {
+		if (generation !== moveGeneration || !window.imageAccount.authorized) return;
+		if (error.status === 400) {
+			moveError.textContent = error.message; moveError.hidden = false; moveSummary.textContent = '请求未执行，请检查输入后重新确认。';
+			moveDirectory.disabled = false; moveNewDirectory.disabled = false; moveAcknowledged.disabled = false;
+			moveAcknowledged.checked = false; confirmMoveButton.disabled = false;
+			return;
+		}
+		moveError.textContent = `${error.message || '请求失败。'} 如果请求已发送，部分图片可能已移动；请刷新检查两个目录，勿直接重复提交。`;
+		cursor = null; listComplete = false;
+		moveError.hidden = false; moveSummary.textContent = '移动结果未确认。';
+		moveFinished = true; confirmMoveButton.hidden = true; cancelMoveButton.textContent = '关闭';
+	} finally {
+		if (generation === moveGeneration) {
+			operationBusy = false; cancelMoveButton.disabled = false; confirmMoveButton.textContent = '确认移动';
+			setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles(); cancelMoveButton.focus();
+		}
+	}
 }
 
 function openImagePreview(key, trigger) {
@@ -975,7 +1132,7 @@ window.addEventListener('image-auth-changed', (event) => {
 		directoryFilter.value = ''; formatFilter.value = ''; directoryScanRequested = false;
 		sortOrder.value = 'time-desc';
 		updateDirectoryOptions();
-		closeImagePreview(); closeRenameDialog(); closeDeleteDialog();
+		closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeMoveDialog(true);
 	}
 });
 
