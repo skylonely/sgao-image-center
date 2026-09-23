@@ -219,6 +219,13 @@ select:focus {
 .upload-file-name { display: flex; align-items: center; min-width: 0; gap: 6px; }
 .upload-file-name input { min-width: 0; height: 38px; }
 .upload-file-extension { flex: none; color: #667085; font-size: 13px; }
+.upload-file-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.upload-file-state { display: inline-flex; padding: 3px 8px; align-items: center; border-radius: 999px; font-size: 12px; font-weight: 650; }
+.upload-file-state.is-pending { color: #475467; background: #e4e7ec; }
+.upload-file-state.is-uploading { color: #175cd3; background: #dbeafe; }
+.upload-file-state.is-success { color: #027a48; background: #d1fadf; }
+.upload-file-state.is-error { color: #b42318; background: #fee4e2; }
+.upload-file-error { min-width: 0; color: #b42318; font-size: 12px; overflow-wrap: anywhere; }
 .upload-file-actions { display: flex; align-items: center; gap: 10px; }
 .upload-remove { padding: 6px 10px; color: #b42318; background: #fff; border: 1px solid #fecdca; border-radius: 8px; cursor: pointer; }
 .upload-remove:disabled { cursor: not-allowed; opacity: .5; }
@@ -344,6 +351,10 @@ select:focus {
 	background: #f2f4f7;
 	border: 1px solid #d0d5dd;
 }
+
+.retry-upload-button { display: flex; width: 100%; height: 44px; margin-top: 10px; font-weight: 650; }
+.retry-upload-button[hidden] { display: none; }
+.retry-upload-button:disabled { cursor: not-allowed; opacity: .55; }
 
 .header-link,
 .back-link {

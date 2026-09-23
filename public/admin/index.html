@@ -43,9 +43,10 @@
 				</div>
 
 				<div id="fileList" class="file-list" aria-label="待上传图片，可预览、修改文件名或移除"></div>
-				<p class="help-text">上传前可修改文件名或移除图片；文件名仅支持英文字母、数字、点、短横线和下划线。目录在上方统一设置。</p>
+				<p class="help-text">上传前可修改文件名或移除图片；文件名支持英文字母、数字、点、短横线和下划线。已上传项的“清除记录”不会删除线上图片，目录在上方统一设置。</p>
 
 				<button id="uploadButton" class="primary-button">开始上传</button>
+				<button id="retryFailedButton" class="secondary-button light retry-upload-button" type="button" hidden>只重试失败项</button>
 
 				<div id="status" class="status"></div>
 			</section>

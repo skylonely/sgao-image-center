@@ -5,6 +5,7 @@ const dropZone = document.querySelector('#dropZone');
 const fileInput = document.querySelector('#fileInput');
 const fileList = document.querySelector('#fileList');
 const uploadButton = document.querySelector('#uploadButton');
+const retryFailedButton = document.querySelector('#retryFailedButton');
 const statusBox = document.querySelector('#status');
 const conflictDialog = document.querySelector('#conflictDialog');
 const conflictKey = document.querySelector('#conflictKey');
@@ -21,6 +22,7 @@ const restoreStatus = document.querySelector('#restoreStatus');
 
 let selectedFiles = [];
 const previewUrls = new Map();
+const uploadStates = new Map();
 let uploadBusy = false;
 let conflictResolver = null;
 let directoryRequestId = 0;
@@ -276,12 +278,14 @@ function removeSelectedFile(file) {
 	const previewUrl = previewUrls.get(file);
 	if (previewUrl) URL.revokeObjectURL(previewUrl);
 	previewUrls.delete(file);
+	uploadStates.delete(file);
 	selectedFiles = selectedFiles.filter((entry) => entry !== file);
 }
 
 function clearSelectedFiles() {
 	for (const previewUrl of previewUrls.values()) URL.revokeObjectURL(previewUrl);
 	previewUrls.clear();
+	uploadStates.clear();
 	selectedFiles = [];
 	fileInput.value = '';
 	renderFiles();
@@ -303,7 +307,10 @@ function selectFiles(files, { append = false } = {}) {
 
 	if (!append) clearSelectedFiles();
 	selectedFiles.push(...validFiles);
-	for (const file of validFiles) previewUrls.set(file, URL.createObjectURL(file));
+	for (const file of validFiles) {
+		previewUrls.set(file, URL.createObjectURL(file));
+		uploadStates.set(file, { phase: 'pending' });
+	}
 	renderFiles();
 
 	if (validationErrors.length) {
@@ -314,9 +321,20 @@ function selectFiles(files, { append = false } = {}) {
 	}
 }
 
+function updateUploadActions() {
+	const pendingCount = selectedFiles.filter((file) => uploadStates.get(file)?.phase === 'pending').length;
+	const failedCount = selectedFiles.filter((file) => uploadStates.get(file)?.phase === 'error').length;
+	uploadButton.disabled = uploadBusy || !window.imageAccount.authorized || !pendingCount;
+	uploadButton.textContent = uploadBusy ? '正在上传……' : '开始上传';
+	retryFailedButton.hidden = !failedCount;
+	retryFailedButton.disabled = uploadBusy || !window.imageAccount.authorized || !failedCount;
+	retryFailedButton.textContent = `只重试失败项（${failedCount}）`;
+}
+
 function renderFiles() {
 	fileList.replaceChildren();
 	for (const file of selectedFiles) {
+		const state = uploadStates.get(file) || { phase: 'pending' };
 		const row = document.createElement('div'); row.className = 'file-item upload-file-item';
 		const preview = document.createElement('img'); preview.className = 'upload-file-preview'; preview.src = previewUrls.get(file); preview.alt = `待上传图片预览：${file.name}`;
 		const details = document.createElement('div'); details.className = 'upload-file-details';
@@ -324,7 +342,7 @@ function renderFiles() {
 		const nameRow = document.createElement('div'); nameRow.className = 'upload-file-name';
 		const extension = fileExtension(file.name);
 		const basename = extension ? file.name.slice(0, -(extension.length + 1)) : file.name;
-		const input = document.createElement('input'); input.type = 'text'; input.value = basename; input.maxLength = 120; input.disabled = uploadBusy;
+		const input = document.createElement('input'); input.type = 'text'; input.value = basename; input.maxLength = 120; input.disabled = uploadBusy || state.phase === 'success';
 		input.setAttribute('aria-label', `修改 ${file.name} 的文件名`);
 		input.addEventListener('change', () => {
 			const nextBase = input.value.trim();
@@ -338,17 +356,26 @@ function renderFiles() {
 			if (index < 0) return;
 			selectedFiles[index] = renamed;
 			previewUrls.set(renamed, previewUrls.get(file)); previewUrls.delete(file);
+			uploadStates.delete(file); uploadStates.set(renamed, { phase: 'pending' });
 			statusBox.textContent = ''; statusBox.className = 'status'; renderFiles();
 		});
 		const extensionLabel = document.createElement('span'); extensionLabel.className = 'upload-file-extension'; extensionLabel.textContent = extension ? `.${extension}` : '';
 		nameRow.append(input, extensionLabel); label.append(nameRow);
+		const stateLabel = document.createElement('span'); stateLabel.className = `upload-file-state is-${state.phase}`;
+		stateLabel.textContent = ({ pending: '待上传', uploading: '上传中', success: '已上传', error: '上传失败' })[state.phase];
+		const stateRow = document.createElement('div'); stateRow.className = 'upload-file-status'; stateRow.append(stateLabel);
+		if (state.message) {
+			const errorText = document.createElement('span'); errorText.className = 'upload-file-error'; errorText.textContent = state.message;
+			stateRow.append(errorText);
+		}
 		const size = document.createElement('span'); size.className = 'file-size'; size.textContent = formatSize(file.size);
 		const actions = document.createElement('div'); actions.className = 'upload-file-actions'; actions.append(size);
-		const remove = document.createElement('button'); remove.className = 'upload-remove'; remove.type = 'button'; remove.textContent = '移除'; remove.disabled = uploadBusy;
-		remove.setAttribute('aria-label', `移除 ${file.name}`);
+		const remove = document.createElement('button'); remove.className = 'upload-remove'; remove.type = 'button'; remove.textContent = state.phase === 'success' ? '清除记录' : '移除'; remove.disabled = uploadBusy;
+		remove.setAttribute('aria-label', `${state.phase === 'success' ? '从列表清除已上传记录' : '移除'} ${file.name}`);
 		remove.addEventListener('click', () => { removeSelectedFile(file); renderFiles(); }); actions.append(remove);
-		details.append(label); row.append(preview, details, actions); fileList.append(row);
+		details.append(label, stateRow); row.append(preview, details, actions); fileList.append(row);
 	}
+	updateUploadActions();
 }
 
 function escapeHtml(value) {
@@ -574,7 +601,7 @@ restoreButton.addEventListener('click', async () => {
 	else resetBackup();
 });
 
-uploadButton.addEventListener('click', async () => {
+async function uploadQueuedFiles(phase) {
 	if (uploadBusy) return;
 	const folder = normalizeFolder(folderInput.value);
 
@@ -583,8 +610,9 @@ uploadButton.addEventListener('click', async () => {
 		return;
 	}
 
-	if (!selectedFiles.length) {
-		showError('请选择至少一张图片。');
+	const uploadQueue = selectedFiles.filter((file) => uploadStates.get(file)?.phase === phase);
+	if (!uploadQueue.length) {
+		showError(phase === 'error' ? '没有需要重试的失败项。' : '没有待上传的图片。');
 		return;
 	}
 
@@ -598,8 +626,6 @@ uploadButton.addEventListener('click', async () => {
 	localStorage.setItem('sgaoUploadFolder', folder);
 
 	uploadBusy = true;
-	uploadButton.disabled = true;
-	uploadButton.textContent = '正在上传……';
 	fileInput.disabled = true;
 	renderFiles();
 
@@ -608,41 +634,45 @@ uploadButton.addEventListener('click', async () => {
 
 	const results = [];
 	const failures = [];
-	const completed = [];
-	const uploadQueue = [...selectedFiles];
 
 	for (const file of uploadQueue) {
 		if (!window.imageAccount.authorized) break;
+		uploadStates.set(file, { phase: 'uploading' });
+		renderFiles();
 		try {
 			const upload = await uploadWithConflictChoice(file, folder);
+			if (!window.imageAccount.authorized || !selectedFiles.includes(file)) continue;
 
 			if (upload.cancelled) {
 				failures.push(`${file.name}: 已取消上传`);
-				continue;
+				uploadStates.set(file, { phase: 'error', message: '已取消上传' });
+			} else {
+				results.push(upload.result);
+				uploadStates.set(file, { phase: 'success' });
 			}
-
-			results.push(upload.result);
-			completed.push(file);
 		} catch (error) {
-			failures.push(`${file.name}: ${error instanceof Error ? error.message : '上传失败'}`);
+			if (!window.imageAccount.authorized || !selectedFiles.includes(file)) continue;
+			const message = error instanceof Error ? error.message : '上传失败';
+			failures.push(`${file.name}: ${message}`);
+			uploadStates.set(file, { phase: 'error', message });
 		}
+		renderFiles();
 	}
 
 	if (window.imageAccount.authorized) showResults(results, failures);
 
-	if (results.length) {
+	if (window.imageAccount.authorized && results.length) {
 		addDirectorySuggestion(folder);
 		directoryStatus.textContent = `已从 R2 同步 ${directorySuggestions.size} 个实际目录。`;
 	}
 
 	uploadBusy = false;
-	uploadButton.disabled = false;
-	uploadButton.textContent = '开始上传';
 	fileInput.disabled = false;
-	for (const file of completed) removeSelectedFile(file);
-	if (!selectedFiles.length) fileInput.value = '';
 	renderFiles();
-});
+}
+
+uploadButton.addEventListener('click', () => uploadQueuedFiles('pending'));
+retryFailedButton.addEventListener('click', () => uploadQueuedFiles('error'));
 
 window.addEventListener('image-auth-changed', (event) => {
 	if (event.detail.authorized) loadDirectorySuggestions();
