@@ -20,6 +20,8 @@ const restoreButton = document.querySelector('#restoreButton');
 const restoreStatus = document.querySelector('#restoreStatus');
 
 let selectedFiles = [];
+const previewUrls = new Map();
+let uploadBusy = false;
 let conflictResolver = null;
 let directoryRequestId = 0;
 let directorySuggestions = new Set();
@@ -166,13 +168,13 @@ async function loadDirectorySuggestions() {
 }
 
 dropZone.addEventListener('click', () => {
-	fileInput.click();
+	if (!uploadBusy) fileInput.click();
 });
 
 dropZone.addEventListener('keydown', (event) => {
 	if (event.key === 'Enter' || event.key === ' ') {
 		event.preventDefault();
-		fileInput.click();
+		if (!uploadBusy) fileInput.click();
 	}
 });
 
@@ -188,12 +190,36 @@ dropZone.addEventListener('dragleave', () => {
 dropZone.addEventListener('drop', (event) => {
 	event.preventDefault();
 	dropZone.classList.remove('dragging');
-
-	selectFiles(Array.from(event.dataTransfer.files));
+	if (!uploadBusy) selectFiles(Array.from(event.dataTransfer.files));
 });
 
 fileInput.addEventListener('change', () => {
-	selectFiles(Array.from(fileInput.files || []));
+	const chosen = Array.from(fileInput.files || []);
+	if (!uploadBusy && chosen.length) selectFiles(chosen);
+});
+
+document.addEventListener('paste', (event) => {
+	if (!window.imageAccount.authorized || uploadBusy || !conflictDialog.hidden) return;
+	const editable = 'input, textarea, select, [contenteditable]';
+	if (event.target?.closest?.(editable) || document.activeElement?.matches?.(editable)) return;
+	const pasted = Array.from(event.clipboardData?.items || [])
+		.filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+		.map((item) => ({ file: item.getAsFile(), type: item.type })).filter((entry) => entry.file);
+	if (!pasted.length) return;
+	event.preventDefault();
+	const usedNames = new Set(selectedFiles.map((file) => file.name.toLowerCase()));
+	const timestamp = new Date();
+	const stamp = [timestamp.getFullYear(), String(timestamp.getMonth() + 1).padStart(2, '0'), String(timestamp.getDate()).padStart(2, '0')].join('')
+		+ '-' + [timestamp.getHours(), timestamp.getMinutes(), timestamp.getSeconds()].map((part) => String(part).padStart(2, '0')).join('');
+	const named = pasted.map(({ file, type: clipboardType }) => {
+		const type = file.type || clipboardType;
+		const extension = ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' })[type] || 'bin';
+		let name = `clipboard-${stamp}.${extension}`; let suffix = 2;
+		while (usedNames.has(name.toLowerCase())) name = `clipboard-${stamp}-${suffix++}.${extension}`;
+		usedNames.add(name.toLowerCase());
+		return new File([file], name, { type, lastModified: file.lastModified || Date.now() });
+	});
+	selectFiles(named, { append: true });
 });
 
 function formatSize(bytes) {
@@ -246,7 +272,22 @@ function validateSelectedFile(file) {
 	return null;
 }
 
-function selectFiles(files) {
+function removeSelectedFile(file) {
+	const previewUrl = previewUrls.get(file);
+	if (previewUrl) URL.revokeObjectURL(previewUrl);
+	previewUrls.delete(file);
+	selectedFiles = selectedFiles.filter((entry) => entry !== file);
+}
+
+function clearSelectedFiles() {
+	for (const previewUrl of previewUrls.values()) URL.revokeObjectURL(previewUrl);
+	previewUrls.clear();
+	selectedFiles = [];
+	fileInput.value = '';
+	renderFiles();
+}
+
+function selectFiles(files, { append = false } = {}) {
 	const validFiles = [];
 	const validationErrors = [];
 
@@ -260,7 +301,9 @@ function selectFiles(files) {
 		}
 	}
 
-	selectedFiles = validFiles;
+	if (!append) clearSelectedFiles();
+	selectedFiles.push(...validFiles);
+	for (const file of validFiles) previewUrls.set(file, URL.createObjectURL(file));
 	renderFiles();
 
 	if (validationErrors.length) {
@@ -272,21 +315,40 @@ function selectFiles(files) {
 }
 
 function renderFiles() {
-	if (!selectedFiles.length) {
-		fileList.innerHTML = '';
-		return;
+	fileList.replaceChildren();
+	for (const file of selectedFiles) {
+		const row = document.createElement('div'); row.className = 'file-item upload-file-item';
+		const preview = document.createElement('img'); preview.className = 'upload-file-preview'; preview.src = previewUrls.get(file); preview.alt = `待上传图片预览：${file.name}`;
+		const details = document.createElement('div'); details.className = 'upload-file-details';
+		const label = document.createElement('label'); label.textContent = '文件名';
+		const nameRow = document.createElement('div'); nameRow.className = 'upload-file-name';
+		const extension = fileExtension(file.name);
+		const basename = extension ? file.name.slice(0, -(extension.length + 1)) : file.name;
+		const input = document.createElement('input'); input.type = 'text'; input.value = basename; input.maxLength = 120; input.disabled = uploadBusy;
+		input.setAttribute('aria-label', `修改 ${file.name} 的文件名`);
+		input.addEventListener('change', () => {
+			const nextBase = input.value.trim();
+			if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(nextBase) || nextBase === '..') {
+				input.value = basename; showError('文件名只能使用英文字母、数字、点、短横线和下划线，并以字母或数字开头。'); return;
+			}
+			const nextName = extension ? `${nextBase}.${extension}` : nextBase;
+			if (nextName === file.name) return;
+			const renamed = new File([file], nextName, { type: file.type, lastModified: file.lastModified });
+			const index = selectedFiles.indexOf(file);
+			if (index < 0) return;
+			selectedFiles[index] = renamed;
+			previewUrls.set(renamed, previewUrls.get(file)); previewUrls.delete(file);
+			statusBox.textContent = ''; statusBox.className = 'status'; renderFiles();
+		});
+		const extensionLabel = document.createElement('span'); extensionLabel.className = 'upload-file-extension'; extensionLabel.textContent = extension ? `.${extension}` : '';
+		nameRow.append(input, extensionLabel); label.append(nameRow);
+		const size = document.createElement('span'); size.className = 'file-size'; size.textContent = formatSize(file.size);
+		const actions = document.createElement('div'); actions.className = 'upload-file-actions'; actions.append(size);
+		const remove = document.createElement('button'); remove.className = 'upload-remove'; remove.type = 'button'; remove.textContent = '移除'; remove.disabled = uploadBusy;
+		remove.setAttribute('aria-label', `移除 ${file.name}`);
+		remove.addEventListener('click', () => { removeSelectedFile(file); renderFiles(); }); actions.append(remove);
+		details.append(label); row.append(preview, details, actions); fileList.append(row);
 	}
-
-	fileList.innerHTML = selectedFiles
-		.map(
-			(file) => `
-				<div class="file-item">
-					<span class="file-name">${escapeHtml(file.name)}</span>
-					<span class="file-size">${formatSize(file.size)}</span>
-				</div>
-			`,
-		)
-		.join('');
 }
 
 function escapeHtml(value) {
@@ -513,6 +575,7 @@ restoreButton.addEventListener('click', async () => {
 });
 
 uploadButton.addEventListener('click', async () => {
+	if (uploadBusy) return;
 	const folder = normalizeFolder(folderInput.value);
 
 	if (!window.imageAccount.authorized) {
@@ -534,16 +597,21 @@ uploadButton.addEventListener('click', async () => {
 	folderInput.value = folder;
 	localStorage.setItem('sgaoUploadFolder', folder);
 
+	uploadBusy = true;
 	uploadButton.disabled = true;
 	uploadButton.textContent = '正在上传……';
+	fileInput.disabled = true;
+	renderFiles();
 
 	statusBox.className = 'status';
 	statusBox.innerHTML = '';
 
 	const results = [];
 	const failures = [];
+	const completed = [];
+	const uploadQueue = [...selectedFiles];
 
-	for (const file of selectedFiles) {
+	for (const file of uploadQueue) {
 		if (!window.imageAccount.authorized) break;
 		try {
 			const upload = await uploadWithConflictChoice(file, folder);
@@ -554,6 +622,7 @@ uploadButton.addEventListener('click', async () => {
 			}
 
 			results.push(upload.result);
+			completed.push(file);
 		} catch (error) {
 			failures.push(`${file.name}: ${error instanceof Error ? error.message : '上传失败'}`);
 		}
@@ -566,21 +635,20 @@ uploadButton.addEventListener('click', async () => {
 		directoryStatus.textContent = `已从 R2 同步 ${directorySuggestions.size} 个实际目录。`;
 	}
 
+	uploadBusy = false;
 	uploadButton.disabled = false;
 	uploadButton.textContent = '开始上传';
-
-	if (!failures.length) {
-		selectedFiles = [];
-		fileInput.value = '';
-		renderFiles();
-	}
+	fileInput.disabled = false;
+	for (const file of completed) removeSelectedFile(file);
+	if (!selectedFiles.length) fileInput.value = '';
+	renderFiles();
 });
 
 window.addEventListener('image-auth-changed', (event) => {
 	if (event.detail.authorized) loadDirectorySuggestions();
 	else {
 		directoryRequestId += 1; directorySuggestions.clear(); renderDirectorySuggestions(); resolveConflict('cancel');
-		selectedFiles = []; fileInput.value = ''; fileList.replaceChildren(); statusBox.replaceChildren();
+		clearSelectedFiles(); statusBox.replaceChildren();
 		resetBackup();
 	}
 });

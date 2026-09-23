@@ -36,12 +36,14 @@
 					<div class="drop-icon">＋</div>
 					<strong>拖动图片到这里</strong>
 					<span>或点击选择图片，可一次选择多张</span>
+					<span>也可在页面按 Ctrl/Command + V 粘贴截图，连续粘贴会加入列表</span>
 					<small>JPEG、PNG、WebP、GIF、SVG · 单张最大 10 MB</small>
 
 					<input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.svg,image/jpeg,image/png,image/webp,image/gif,image/svg+xml" multiple />
 				</div>
 
-				<div id="fileList" class="file-list"></div>
+				<div id="fileList" class="file-list" aria-label="待上传图片，可预览、修改文件名或移除"></div>
+				<p class="help-text">上传前可修改文件名或移除图片；文件名仅支持英文字母、数字、点、短横线和下划线。目录在上方统一设置。</p>
 
 				<button id="uploadButton" class="primary-button">开始上传</button>
 
