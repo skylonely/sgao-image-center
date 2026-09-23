@@ -108,6 +108,8 @@
 						<button id="batchTagsButton" class="toolbar-button" type="button">编辑标签</button>
 						<button id="batchMoveButton" class="toolbar-button" type="button">移动所选</button>
 						<button id="batchDeleteButton" class="toolbar-button danger" type="button">删除所选</button>
+						<button id="batchRestoreTrashButton" class="toolbar-button" type="button" hidden>恢复所选</button>
+						<button id="batchPurgeTrashButton" class="toolbar-button danger" type="button" hidden>彻底删除所选</button>
 					</div>
 				</div>
 
@@ -306,6 +308,21 @@
 					<button id="confirmDeleteButton" class="dialog-button danger" type="button">确认删除</button>
 				</div>
 			</div>
+		</div>
+
+		<div id="trashBatchDialog" class="modal-backdrop" hidden>
+			<form id="trashBatchForm" class="delete-dialog move-dialog" role="dialog" aria-modal="true" aria-labelledby="trashBatchTitle" aria-describedby="trashBatchWarning">
+				<h2 id="trashBatchTitle">批量处理回收站图片</h2>
+				<p id="trashBatchWarning"></p>
+				<p id="trashBatchSummary" class="move-summary" role="status" aria-live="polite"></p>
+				<ul id="trashBatchResults" class="move-results" aria-label="逐张处理结果"></ul>
+				<label id="trashBatchAcknowledgement" class="move-ack" hidden><input id="trashBatchAcknowledged" type="checkbox" />我确认永久删除所选图片，且无法恢复。</label>
+				<p id="trashBatchError" class="rename-error" role="alert" hidden></p>
+				<div class="dialog-actions">
+					<button id="cancelTrashBatchButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmTrashBatchButton" class="dialog-button primary-choice" type="submit">确认</button>
+				</div>
+			</form>
 		</div>
 
 		<div id="toast" class="toast" role="status" aria-live="polite"></div>

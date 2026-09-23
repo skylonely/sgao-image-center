@@ -38,6 +38,19 @@ const batchDeleteButton = document.querySelector('#batchDeleteButton');
 const batchMoveButton = document.querySelector('#batchMoveButton');
 const batchExportButton = document.querySelector('#batchExportButton');
 const batchTagsButton = document.querySelector('#batchTagsButton');
+const batchRestoreTrashButton = document.querySelector('#batchRestoreTrashButton');
+const batchPurgeTrashButton = document.querySelector('#batchPurgeTrashButton');
+const trashBatchDialog = document.querySelector('#trashBatchDialog');
+const trashBatchForm = document.querySelector('#trashBatchForm');
+const trashBatchTitle = document.querySelector('#trashBatchTitle');
+const trashBatchWarning = document.querySelector('#trashBatchWarning');
+const trashBatchSummary = document.querySelector('#trashBatchSummary');
+const trashBatchResults = document.querySelector('#trashBatchResults');
+const trashBatchAcknowledgement = document.querySelector('#trashBatchAcknowledgement');
+const trashBatchAcknowledged = document.querySelector('#trashBatchAcknowledged');
+const trashBatchError = document.querySelector('#trashBatchError');
+const cancelTrashBatchButton = document.querySelector('#cancelTrashBatchButton');
+const confirmTrashBatchButton = document.querySelector('#confirmTrashBatchButton');
 const exportDialog = document.querySelector('#exportDialog');
 const exportForm = document.querySelector('#exportForm');
 const exportSummary = document.querySelector('#exportSummary');
@@ -136,6 +149,10 @@ let lastPreviewTrigger = null;
 let trashMode = false;
 let loadGeneration = 0;
 let pendingPurgeFile = null;
+let pendingTrashBatchFiles = [];
+let trashBatchAction = null;
+let trashBatchFinished = false;
+let trashBatchGeneration = 0;
 let operationBusy = false;
 let listComplete = false;
 let loadingFiles = false;
@@ -167,11 +184,11 @@ function switchView(nextTrashMode) {
 	cancelFileLoad();
 	listComplete = false; searchPaused = false;
 	files = []; cursor = null; selectedKeys.clear();
-	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeTagsDialog(true); closeBatchTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeMoveDialog(); closeExportDialog(true);
+	closeImagePreview(); closeDeleteDialog(); closeTrashBatchDialog(true); closeRenameDialog(); closeTagsDialog(true); closeBatchTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeMoveDialog(); closeExportDialog(true);
 	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
 	trashFilesButton.setAttribute('aria-pressed', String(trashMode));
 	trashNotice.hidden = !trashMode;
-	selectVisibleButton.hidden = trashMode;
+	selectVisibleButton.hidden = false;
 	searchInput.value = '';
 	directoryFilter.value = ''; formatFilter.value = ''; tagFilter.value = ''; favoriteFilter.checked = false; directoryScanRequested = false;
 	sortOrder.value = 'time-desc';
@@ -217,6 +234,14 @@ batchDeleteButton.addEventListener('click', () => openDeleteDialog([...selectedK
 batchMoveButton.addEventListener('click', openMoveDialog);
 batchExportButton.addEventListener('click', () => openExportDialog('selected'));
 batchTagsButton.addEventListener('click', openBatchTagsDialog);
+batchRestoreTrashButton.addEventListener('click', () => openTrashBatchDialog('restore'));
+batchPurgeTrashButton.addEventListener('click', () => openTrashBatchDialog('purge'));
+cancelTrashBatchButton.addEventListener('click', () => closeTrashBatchDialog());
+trashBatchForm.addEventListener('submit', submitTrashBatch);
+trashBatchAcknowledged.addEventListener('change', () => {
+	confirmTrashBatchButton.disabled = trashBatchAction === 'purge' && !trashBatchAcknowledged.checked;
+});
+trashBatchDialog.addEventListener('click', (event) => { if (event.target === trashBatchDialog) closeTrashBatchDialog(); });
 cancelExportButton.addEventListener('click', cancelExport);
 exportForm.addEventListener('submit', exportSelectedFiles);
 exportDialog.addEventListener('click', (event) => { if (event.target === exportDialog) cancelExport(); });
@@ -257,6 +282,10 @@ renameDialog.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+	if (!trashBatchDialog.hidden) {
+		if (event.key === 'Escape') closeTrashBatchDialog();
+		return;
+	}
 	if (!batchTagsDialog.hidden) {
 		if (event.key === 'Escape') closeBatchTagsDialog();
 		return;
@@ -688,7 +717,7 @@ function renderFiles() {
 	const visibleFiles = files.filter((file) => (!query || file.key.toLocaleLowerCase().includes(query)) && matchesFileFilters(file));
 	const previewed = previewIndex >= 0 ? renderedFiles[previewIndex] : null;
 	if (sortOrder.value !== 'directory') visibleFiles.sort(compareFileRecords);
-	const availableKeys = new Set(files.map((file) => file.key));
+	const availableKeys = new Set(files.map((file) => trashMode ? file.id : file.key));
 
 	renderedFiles = visibleFiles;
 	if (previewed) {
@@ -889,13 +918,18 @@ function createFileRow(file) {
 }
 
 function updateSelectionUI() {
-	const selectedVisibleCount = renderedFiles.filter((file) => selectedKeys.has(file.key)).length;
+	const selectedVisibleCount = renderedFiles.filter((file) => selectedKeys.has(trashMode ? file.id : file.key)).length;
 	const allVisibleSelected = renderedFiles.length > 0 && selectedVisibleCount === renderedFiles.length;
 	const selectionAtLimit = selectedVisibleCount > 0 && selectedKeys.size >= MAX_BATCH_DELETE;
 
-	selectionBar.hidden = trashMode || selectedKeys.size === 0;
+	selectionBar.hidden = selectedKeys.size === 0;
 	selectedCount.textContent = `已选择 ${selectedKeys.size} 个文件`;
 	batchDeleteButton.textContent = `删除所选（${selectedKeys.size}）`;
+	batchRestoreTrashButton.textContent = `恢复所选（${selectedKeys.size}）`;
+	batchPurgeTrashButton.textContent = `彻底删除所选（${selectedKeys.size}）`;
+	for (const button of [batchDeleteButton, batchMoveButton, batchExportButton, batchTagsButton]) button.hidden = trashMode;
+	batchRestoreTrashButton.hidden = !trashMode;
+	batchPurgeTrashButton.hidden = !trashMode;
 	batchMoveButton.textContent = `移动所选（${selectedKeys.size}）`;
 	batchExportButton.textContent = `导出所选（${selectedKeys.size}）`;
 	batchTagsButton.textContent = `编辑标签（${selectedKeys.size}）`;
@@ -903,6 +937,8 @@ function updateSelectionUI() {
 	batchExportButton.disabled = operationBusy;
 	batchTagsButton.disabled = operationBusy;
 	batchDeleteButton.disabled = operationBusy;
+	batchRestoreTrashButton.disabled = operationBusy;
+	batchPurgeTrashButton.disabled = operationBusy;
 	clearSelectionButton.disabled = operationBusy;
 	selectVisibleButton.textContent =
 		allVisibleSelected || selectionAtLimit ? '取消当前选择' : renderedFiles.length > MAX_BATCH_DELETE ? '选择前 50 个' : '选择当前';
@@ -912,7 +948,7 @@ function updateSelectionUI() {
 
 function toggleVisibleSelection() {
 	if (operationBusy) return;
-	const visibleKeys = renderedFiles.map((file) => file.key);
+	const visibleKeys = renderedFiles.map((file) => trashMode ? file.id : file.key);
 	const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.has(key));
 	const selectedVisibleCount = visibleKeys.filter((key) => selectedKeys.has(key)).length;
 	const selectionAtLimit = selectedVisibleCount > 0 && selectedKeys.size >= MAX_BATCH_DELETE;
@@ -1761,13 +1797,117 @@ window.addEventListener('image-auth-changed', (event) => {
 		sortOrder.value = 'time-desc';
 		updateDirectoryOptions();
 		updateTagOptions();
-		closeImagePreview(); closeRenameDialog(); closeTagsDialog(true); closeBatchTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
+		closeImagePreview(); closeRenameDialog(); closeTagsDialog(true); closeBatchTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeDeleteDialog(); closeTrashBatchDialog(true); closeMoveDialog(true); closeExportDialog(true);
 	}
 });
+
+function openTrashBatchDialog(action) {
+	if (operationBusy || !trashMode || !window.imageAccount.authorized || !selectedKeys.size || !['restore', 'purge'].includes(action)) return;
+	const selected = files.filter((file) => selectedKeys.has(file.id));
+	if (!selected.length || selected.length > MAX_BATCH_DELETE) return;
+	closeImagePreview(); closeDeleteDialog(); closeExportDialog(true);
+	pendingTrashBatchFiles = selected.map((file) => ({ id: file.id, key: file.key }));
+	trashBatchGeneration += 1; trashBatchAction = action; trashBatchFinished = false;
+	trashBatchTitle.textContent = action === 'restore' ? `恢复所选 ${selected.length} 张图片？` : `彻底删除所选 ${selected.length} 张图片？`;
+	trashBatchWarning.textContent = action === 'restore'
+		? '逐张恢复到原路径。如果原路径已有新图片，该张会失败且不会覆盖新图片。'
+		: '将永久移除所选回收站副本，无法恢复；不会删除原路径后来上传的新图片。';
+	trashBatchSummary.textContent = `已选择 ${selected.length} 张图片。操作会逐张执行，失败项会保留勾选。`;
+	trashBatchError.hidden = true; trashBatchError.textContent = '';
+	trashBatchResults.replaceChildren();
+	for (const file of selected) {
+		const item = document.createElement('li'); item.textContent = file.key; trashBatchResults.append(item);
+	}
+	trashBatchAcknowledgement.hidden = action !== 'purge'; trashBatchAcknowledged.checked = false;
+	confirmTrashBatchButton.hidden = false; confirmTrashBatchButton.disabled = action === 'purge';
+	confirmTrashBatchButton.classList.toggle('primary-choice', action !== 'purge');
+	confirmTrashBatchButton.classList.toggle('danger', action === 'purge');
+	confirmTrashBatchButton.textContent = action === 'restore' ? '确认恢复' : '确认彻底删除';
+	cancelTrashBatchButton.disabled = false; cancelTrashBatchButton.textContent = '取消';
+	trashBatchDialog.hidden = false; document.body.classList.add('modal-open');
+	(action === 'purge' ? trashBatchAcknowledged : cancelTrashBatchButton).focus();
+}
+
+function closeTrashBatchDialog(force = false) {
+	if (operationBusy && !force) return;
+	trashBatchGeneration += 1; pendingTrashBatchFiles = []; trashBatchAction = null; trashBatchFinished = false;
+	trashBatchAcknowledged.checked = false; trashBatchAcknowledgement.hidden = true;
+	trashBatchError.hidden = true; trashBatchError.textContent = ''; trashBatchResults.replaceChildren();
+	trashBatchDialog.hidden = true; document.body.classList.remove('modal-open');
+	if (!force && window.imageAccount.authorized) (trashMode ? batchRestoreTrashButton : activeFilesButton).focus();
+}
+
+async function submitTrashBatch(event) {
+	event.preventDefault();
+	if (operationBusy || trashBatchFinished || !trashMode || !window.imageAccount.authorized || !pendingTrashBatchFiles.length) return;
+	if (trashBatchAction === 'purge' && !trashBatchAcknowledged.checked) {
+		trashBatchError.textContent = '请先确认永久删除所选图片。'; trashBatchError.hidden = false; return;
+	}
+	const action = trashBatchAction;
+	if (!['restore', 'purge'].includes(action)) return;
+	const snapshot = pendingTrashBatchFiles.map((file) => ({ ...file }));
+	const generation = trashBatchGeneration;
+	let succeeded = 0, failed = 0, cleanupPending = 0;
+	operationBusy = true; cancelFileLoad(); searchPaused = true;
+	confirmTrashBatchButton.disabled = true; confirmTrashBatchButton.textContent = '处理中…';
+	cancelTrashBatchButton.disabled = true; trashBatchAcknowledged.disabled = true;
+	trashBatchError.hidden = true; trashBatchSummary.textContent = `正在处理 0 / ${snapshot.length} 张，请勿关闭页面。`;
+	renderFiles(); setLoading(loadingFiles);
+	try {
+		for (const [index, file] of snapshot.entries()) {
+			if (generation !== trashBatchGeneration || !window.imageAccount.authorized) return;
+			const item = trashBatchResults.children[index];
+			try {
+				const result = await requestFiles('/api/trash', { method: action === 'restore' ? 'POST' : 'DELETE',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(action === 'restore' ? { id: file.id } : { id: file.id, confirmation: 'DELETE' }) });
+				if (generation !== trashBatchGeneration || !window.imageAccount.authorized) return;
+				succeeded += 1;
+				selectedKeys.delete(file.id);
+				if (result.cleanupPending) {
+					cleanupPending += 1; item.setAttribute('data-state', 'warning');
+					item.textContent = `已恢复但副本待清理：${file.key}。请刷新核对。`;
+				} else {
+					files = files.filter((entry) => entry.id !== file.id);
+					item.setAttribute('data-state', 'moved');
+					item.textContent = `${action === 'restore' ? '已恢复' : '已彻底删除'}：${file.key}`;
+				}
+			} catch (error) {
+				if (generation !== trashBatchGeneration || !window.imageAccount.authorized) return;
+				failed += 1; item.setAttribute('data-state', 'failed');
+				item.textContent = `未完成：${file.key} — ${error.message || '结果未确认，请刷新核对后再操作。'}`;
+			}
+			trashBatchSummary.textContent = `已处理 ${index + 1} / ${snapshot.length} 张。`;
+			renderFiles();
+		}
+		trashBatchFinished = true;
+		trashBatchSummary.textContent = `已${action === 'restore' ? '恢复' : '彻底删除'} ${succeeded} 张，未完成 ${failed} 张${cleanupPending ? `；${cleanupPending} 张副本待清理` : ''}。${failed ? '未完成项保持勾选，请刷新核对后再试。' : ''}`;
+		confirmTrashBatchButton.hidden = true; cancelTrashBatchButton.textContent = '关闭';
+	} finally {
+		operationBusy = false; trashBatchAcknowledged.disabled = false; cancelTrashBatchButton.disabled = false;
+		setLoading(loadingFiles);
+		if (window.imageAccount.authorized) renderFiles();
+	}
+}
 
 function createTrashRow(file) {
 	const row = document.createElement('article');
 	row.className = 'file-row recycle-row';
+	row.classList.toggle('selected', selectedKeys.has(file.id));
+	const selectLabel = document.createElement('label'); selectLabel.className = 'file-select'; selectLabel.title = `选择 ${file.key}`;
+	const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedKeys.has(file.id);
+	checkbox.disabled = operationBusy; checkbox.setAttribute('aria-label', `选择回收站图片 ${file.key}`);
+	checkbox.addEventListener('change', () => {
+		if (operationBusy) return;
+		if (checkbox.checked) {
+			if (selectedKeys.size >= MAX_BATCH_DELETE) {
+				checkbox.checked = false; showToast(`单次最多选择 ${MAX_BATCH_DELETE} 个文件`); return;
+			}
+			selectedKeys.add(file.id);
+		} else selectedKeys.delete(file.id);
+		row.classList.toggle('selected', checkbox.checked); updateSelectionUI();
+	});
+	selectLabel.append(checkbox);
 	const image = document.createElement('img');
 	image.className = 'recycle-thumbnail'; image.src = file.url; image.alt = ''; image.loading = 'lazy';
 	image.addEventListener('error', () => { image.hidden = true; });
@@ -1780,7 +1920,7 @@ function createTrashRow(file) {
 	const actions = document.createElement('div'); actions.className = 'file-actions';
 	actions.append(createActionButton('恢复', 'rename', () => restoreFile(file)),
 		createActionButton('彻底删除', 'delete', () => openPurgeDialog(file)));
-	row.append(image, details, actions);
+	row.append(selectLabel, image, details, actions);
 	return row;
 }
 

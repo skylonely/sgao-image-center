@@ -634,6 +634,7 @@ select:focus {
 .selection-actions {
 	margin-left: auto;
 }
+.selection-actions [hidden] { display: none; }
 
 .manager-status {
 	font-size: 14px;
@@ -1286,6 +1287,7 @@ select:focus {
 .move-results li { padding: 10px 0; border-bottom: 1px solid #eaecf0; overflow-wrap: anywhere; font-size: 13px; color: #475467; }
 .move-results li[data-state="failed"] { color: #b42318; }
 .move-results li[data-state="moved"] { color: #027a48; }
+.move-results li[data-state="warning"] { color: #b54708; }
 .replace-dialog input[type="file"] { display: block; width: 100%; margin-top: 8px; padding: 10px; color: #344054; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; }
 .versions-dialog .move-results { max-height: 320px; }
 .versions-dialog .move-results li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 14px; }
@@ -1566,7 +1568,7 @@ select:focus {
 .recycle-tabs button { min-height: 44px; padding: 10px 20px; border: 1px solid #d7deea; border-radius: 12px; background: #fff; color: #526079; cursor: pointer; font: inherit; }
 .recycle-tabs button[aria-pressed="true"] { color: #245bcd; border-color: #b6cbf7; background: #edf4ff; }
 .recycle-tabs button:focus-visible { outline: 3px solid #8db4ff; outline-offset: 2px; }
-.file-row.recycle-row { grid-template-columns: 64px minmax(0, 1fr) auto; }
+.file-row.recycle-row { grid-template-columns: 24px 64px minmax(0, 1fr) auto; }
 .recycle-thumbnail { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; background: #f3f5f9; }
 .recycle-row .file-meta { overflow-wrap: anywhere; }
-@media (max-width: 700px) { .file-row.recycle-row { grid-template-columns: 56px minmax(0, 1fr); } .recycle-row .file-actions { grid-column: 1 / -1; } }
+@media (max-width: 700px) { .file-row.recycle-row { grid-template-columns: 24px 56px minmax(0, 1fr); } .recycle-row .file-actions { grid-column: 1 / -1; } }
