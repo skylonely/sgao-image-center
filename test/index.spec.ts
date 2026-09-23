@@ -370,6 +370,42 @@ describe('image center worker', () => {
 		expect(await conflictResponse.json()).toMatchObject({ code: 'FILE_EXISTS' });
 	});
 
+	it('stores tags and favorite state with the image while preserving bytes and rejects stale edits', async () => {
+		const key = `${uploadTestPrefix}tagged.png`;
+		const bytes = new Uint8Array([...pngSignature, 42]);
+		await env.IMAGES.put(key, bytes, {
+			httpMetadata: { contentType: 'image/png', cacheControl: 'public, max-age=60' },
+			customMetadata: { originalFilename: 'tagged.png', uploadedAt: '2026-09-23T00:00:00Z' },
+		});
+		const current = await env.IMAGES.head(key);
+		const response = await ownerFetch('https://example.com/api/files', {
+			method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'metadata', key, expectedEtag: current!.etag, expectedVersion: current!.version, tags: ['旅行', '证件', '旅行'], favorite: true }),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ success: true, file: { key, tags: ['旅行', '证件'], favorite: true, uploaded: '2026-09-23T00:00:00Z' } });
+		const updated = await env.IMAGES.get(key);
+		expect(updated!.customMetadata).toMatchObject({ originalFilename: 'tagged.png', sgaoTags: '["旅行","证件"]', sgaoFavorite: '1' });
+		expect(new Uint8Array(await updated!.arrayBuffer())).toEqual(bytes);
+		const stale = await ownerFetch('https://example.com/api/files', {
+			method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'metadata', key, expectedEtag: current!.etag, expectedVersion: current!.version, tags: [], favorite: false }),
+		});
+		expect(stale.status).toBe(409);
+	});
+
+	it('rejects unsafe or oversized tag payloads before changing R2 metadata', async () => {
+		const key = `${uploadTestPrefix}invalid-tags.png`;
+		await env.IMAGES.put(key, new Uint8Array([...pngSignature, 4]), { httpMetadata: { contentType: 'image/png' } });
+		const current = await env.IMAGES.head(key);
+		const response = await ownerFetch('https://example.com/api/files', {
+			method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'metadata', key, expectedEtag: current!.etag, expectedVersion: current!.version, tags: Array.from({ length: 13 }, (_, index) => `tag-${index}`), favorite: false }),
+		});
+		expect(response.status).toBe(400);
+		expect((await env.IMAGES.head(key))?.customMetadata?.sgaoTags).toBeUndefined();
+	});
+
 	it('deletes multiple selected files in one request', async () => {
 		const keys = [`${uploadTestPrefix}batch-1.png`, `${uploadTestPrefix}batch-2.png`, `${uploadTestPrefix}batch-3.png`];
 

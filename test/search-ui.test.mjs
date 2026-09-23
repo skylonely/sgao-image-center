@@ -542,3 +542,20 @@ test('overview can stop a pending metadata scan without showing a partial total'
 	resolve(page([file('late.png')])); await scanning; assert.match(h.nodes.get('#overviewStatus').textContent, /已取消/);
 	assert.equal(h.nodes.get('#overviewCards').children.length, 0);
 });
+
+test('tag and favorite filters combine with existing filename, directory and format filters', async () => {
+	const h = harness(async () => page([]), null);
+	h.run(`files = [
+		{ key: 'travel/id.png', url: '/image/travel/id.png', size: 100, uploaded: '2026-09-18', tags: ['旅行', '证件'], favorite: true },
+		{ key: 'travel/cat.png', url: '/image/travel/cat.png', size: 100, uploaded: '2026-09-18', tags: ['旅行'], favorite: false },
+		{ key: 'docs/id.png', url: '/image/docs/id.png', size: 100, uploaded: '2026-09-18', tags: ['证件'], favorite: true }
+	]; listComplete = true;`);
+	h.nodes.get('#tagFilter').value = '旅行'; h.nodes.get('#favoriteFilter').checked = true;
+	assert.equal(h.run(`files.filter(matchesFileFilters).length`), 1);
+	assert.equal(h.run(`files.filter(matchesFileFilters)[0].key`), 'travel/id.png');
+	h.nodes.get('#favoriteFilter').checked = false;
+	assert.equal(h.run(`files.filter(matchesFileFilters).length`), 2);
+	h.nodes.get('#tagFilter').value = ''; h.nodes.get('#directoryFilter').value = 'dir:docs'; h.nodes.get('#favoriteFilter').checked = true;
+	assert.equal(h.run(`files.filter(matchesFileFilters)[0].key`), 'docs/id.png');
+	assert.equal(h.run('hasActiveCriteria()'), true);
+});

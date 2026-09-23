@@ -66,6 +66,11 @@
 							<option value="png">PNG</option><option value="webp">WebP</option><option value="gif">GIF</option><option value="svg">SVG</option>
 						</select>
 					</div>
+					<div class="filter-field filter-tag">
+						<label for="tagFilter">标签</label>
+						<select id="tagFilter"><option value="">全部标签</option></select>
+					</div>
+					<label class="favorite-filter"><input id="favoriteFilter" type="checkbox" />仅看收藏</label>
 					<div class="filter-field filter-sort">
 						<label for="sortOrder">排序</label>
 						<select id="sortOrder">
@@ -206,6 +211,22 @@
 				<div class="dialog-actions">
 					<button id="cancelRenameButton" class="dialog-button" type="button">取消</button>
 					<button id="confirmRenameButton" class="dialog-button primary-choice" type="submit">保存名称</button>
+				</div>
+			</form>
+		</div>
+
+		<div id="tagsDialog" class="modal-backdrop" hidden>
+			<form id="tagsForm" class="delete-dialog tags-dialog" role="dialog" aria-modal="true" aria-labelledby="tagsTitle">
+				<h2 id="tagsTitle">编辑标签</h2>
+				<code id="tagsKey"></code>
+				<label class="rename-label" for="tagsInput">标签</label>
+				<input id="tagsInput" type="text" maxlength="400" autocomplete="off" placeholder="例如：旅行，证件，头像" />
+				<p class="help-text">使用逗号分隔；最多 12 个标签，每个最多 32 个字符。</p>
+				<label class="move-ack"><input id="tagsFavorite" type="checkbox" />收藏这张图片</label>
+				<p id="tagsError" class="rename-error" role="alert" hidden></p>
+				<div class="dialog-actions">
+					<button id="cancelTagsButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmTagsButton" class="dialog-button primary-choice" type="submit">保存标签</button>
 				</div>
 			</form>
 		</div>

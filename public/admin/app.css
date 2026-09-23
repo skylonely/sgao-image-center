@@ -498,6 +498,8 @@ select:focus {
 .filter-format { flex: 0 1 210px; }
 .filter-sort { flex: 0 1 210px; }
 .filter-toolbar > button { min-height: 46px; }
+.favorite-filter { display: inline-flex; min-height: 46px; align-items: center; gap: 8px; padding: 0 12px; color: #344054; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
+.favorite-filter input { width: 17px; height: 17px; accent-color: #f9704f; }
 .filter-hint-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
 .filter-hint-row .help-text { flex: 1 1 240px; margin: 0; font-size: 13px; }
 .filter-hint-row button { flex: none; }
@@ -867,6 +869,9 @@ select:focus {
 	color: #98a2b3;
 	font-size: 12px;
 }
+.file-labels { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.file-label { display: inline-flex; max-width: 100%; padding: 3px 8px; overflow: hidden; color: #344054; background: #f2f4f7; border: 1px solid #e4e7ec; border-radius: 999px; font-size: 12px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.file-label.favorite { color: #9a6700; background: #fffaeb; border-color: #fedf89; }
 
 .sorted-files-list .file-meta {
 	overflow-wrap: anywhere;
@@ -1235,6 +1240,7 @@ select:focus {
 .rename-label {
 	margin-top: 20px;
 }
+.tags-dialog { width: min(500px, 100%); }
 
 .move-dialog { width: min(620px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; }
 .export-dialog code { font-size: .88em; }

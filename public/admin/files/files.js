@@ -6,6 +6,8 @@ const manager = document.querySelector('#manager');
 const searchInput = document.querySelector('#searchInput');
 const directoryFilter = document.querySelector('#directoryFilter');
 const formatFilter = document.querySelector('#formatFilter');
+const tagFilter = document.querySelector('#tagFilter');
+const favoriteFilter = document.querySelector('#favoriteFilter');
 const sortOrder = document.querySelector('#sortOrder');
 const sortTimeDescOption = document.querySelector('#sortTimeDescOption');
 const sortTimeAscOption = document.querySelector('#sortTimeAscOption');
@@ -67,6 +69,14 @@ const renameInput = document.querySelector('#renameInput');
 const renameError = document.querySelector('#renameError');
 const cancelRenameButton = document.querySelector('#cancelRenameButton');
 const confirmRenameButton = document.querySelector('#confirmRenameButton');
+const tagsDialog = document.querySelector('#tagsDialog');
+const tagsForm = document.querySelector('#tagsForm');
+const tagsKey = document.querySelector('#tagsKey');
+const tagsInput = document.querySelector('#tagsInput');
+const tagsFavorite = document.querySelector('#tagsFavorite');
+const tagsError = document.querySelector('#tagsError');
+const cancelTagsButton = document.querySelector('#cancelTagsButton');
+const confirmTagsButton = document.querySelector('#confirmTagsButton');
 const replaceDialog = document.querySelector('#replaceDialog');
 const replaceForm = document.querySelector('#replaceForm');
 const replaceKey = document.querySelector('#replaceKey');
@@ -102,6 +112,7 @@ let selectedKeys = new Set();
 let cursor = null;
 let pendingDeleteKeys = [];
 let pendingRenameFile = null;
+let pendingTagsFile = null;
 let pendingReplaceFile = null;
 let pendingVersionFile = null;
 let pendingRestoreVersion = null;
@@ -119,6 +130,7 @@ let searchTimer = null;
 let searchPaused = false;
 let directoryScanRequested = false;
 let directoryOptionsSignature = '';
+let tagOptionsSignature = '';
 let pendingMoveFiles = [];
 let moveFinished = false;
 let moveGeneration = 0;
@@ -141,13 +153,13 @@ function switchView(nextTrashMode) {
 	cancelFileLoad();
 	listComplete = false; searchPaused = false;
 	files = []; cursor = null; selectedKeys.clear();
-	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeReplaceDialog(true); closeVersionsDialog(true); closeMoveDialog(); closeExportDialog(true);
+	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeMoveDialog(); closeExportDialog(true);
 	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
 	trashFilesButton.setAttribute('aria-pressed', String(trashMode));
 	trashNotice.hidden = !trashMode;
 	selectVisibleButton.hidden = trashMode;
 	searchInput.value = '';
-	directoryFilter.value = ''; formatFilter.value = ''; directoryScanRequested = false;
+	directoryFilter.value = ''; formatFilter.value = ''; tagFilter.value = ''; favoriteFilter.checked = false; directoryScanRequested = false;
 	sortOrder.value = 'time-desc';
 	renderFiles();
 	loadFiles({ reset: true });
@@ -162,9 +174,11 @@ loadMoreButton.addEventListener('click', () => loadFiles({ reset: false }));
 searchInput.addEventListener('input', handleSearchInput);
 directoryFilter.addEventListener('change', handleFilterChange);
 formatFilter.addEventListener('change', handleFilterChange);
+tagFilter.addEventListener('change', handleFilterChange);
+favoriteFilter.addEventListener('change', handleFilterChange);
 sortOrder.addEventListener('change', handleSearchInput);
 clearFiltersButton.addEventListener('click', () => {
-	directoryFilter.value = ''; formatFilter.value = '';
+	directoryFilter.value = ''; formatFilter.value = ''; tagFilter.value = ''; favoriteFilter.checked = false;
 	handleFilterChange();
 });
 loadDirectoriesButton.addEventListener('click', () => {
@@ -201,6 +215,9 @@ cancelDeleteButton.addEventListener('click', closeDeleteDialog);
 confirmDeleteButton.addEventListener('click', deleteFile);
 cancelRenameButton.addEventListener('click', closeRenameDialog);
 renameForm.addEventListener('submit', renameFile);
+cancelTagsButton.addEventListener('click', () => closeTagsDialog());
+tagsForm.addEventListener('submit', saveTags);
+tagsDialog.addEventListener('click', (event) => { if (event.target === tagsDialog) closeTagsDialog(); });
 cancelReplaceButton.addEventListener('click', () => closeReplaceDialog());
 replaceForm.addEventListener('submit', replaceFile);
 replaceInput.addEventListener('change', updateReplaceSelection);
@@ -222,6 +239,10 @@ renameDialog.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+	if (!tagsDialog.hidden) {
+		if (event.key === 'Escape') closeTagsDialog();
+		return;
+	}
 	if (!versionsDialog.hidden) {
 		if (event.key === 'Escape') closeVersionsDialog();
 		return;
@@ -400,7 +421,7 @@ function cancelFileLoad() {
 }
 
 function hasActiveCriteria() {
-	return Boolean(searchInput.value.trim() || directoryFilter.value || formatFilter.value);
+	return Boolean(searchInput.value.trim() || directoryFilter.value || formatFilter.value || tagFilter.value || favoriteFilter.checked);
 }
 
 function needsFullList() {
@@ -457,13 +478,32 @@ function updateDirectoryOptions() {
 	directoryFilterHint.textContent = listComplete ? '目录已完整读取，指定目录包含其子目录。' : '目录选项会随读取补齐；可读取全部目录。';
 	loadDirectoriesButton.hidden = listComplete;
 	loadDirectoriesButton.disabled = loadingFiles || operationBusy;
-	clearFiltersButton.disabled = !directoryFilter.value && !formatFilter.value;
+	clearFiltersButton.disabled = !directoryFilter.value && !formatFilter.value && !tagFilter.value && !favoriteFilter.checked;
+}
+
+function updateTagOptions() {
+	const selected = tagFilter.value;
+	const tags = new Set();
+	for (const file of files) for (const tag of file.tags || []) tags.add(tag);
+	if (selected) tags.add(selected);
+	const sorted = [...tags].sort((left, right) => left.localeCompare(right, 'zh-CN'));
+	const signature = JSON.stringify(sorted);
+	if (signature !== tagOptionsSignature) {
+		tagOptionsSignature = signature;
+		tagFilter.replaceChildren();
+		for (const [value, label] of [['', '全部标签'], ...sorted.map((tag) => [tag, tag])]) {
+			const option = document.createElement('option'); option.value = value; option.textContent = label; tagFilter.append(option);
+		}
+		tagFilter.value = selected;
+	}
 }
 
 function matchesFileFilters(file) {
 	const folder = directoryFilter.value;
 	if (folder === 'root' && file.key.includes('/')) return false;
 	if (folder.startsWith('dir:') && !file.key.startsWith(`${folder.slice(4)}/`)) return false;
+	if (favoriteFilter.checked && !file.favorite) return false;
+	if (tagFilter.value && !(file.tags || []).some((tag) => tag === tagFilter.value)) return false;
 	const format = formatFilter.value;
 	if (!format) return true;
 	const filename = file.key.split('/').at(-1);
@@ -494,7 +534,7 @@ function updateSearchProgress(matches) {
 	loadMoreButton.hidden = searching || listComplete;
 	if (!searching) return;
 	const busy = loadingFiles || searchTimer !== null;
-	const action = directoryFilter.value || formatFilter.value ? '筛选' : searchInput.value.trim() ? '搜索' : directoryScanRequested ? '读取' : '排序';
+	const action = directoryFilter.value || formatFilter.value || tagFilter.value || favoriteFilter.checked ? '筛选' : searchInput.value.trim() ? '搜索' : directoryScanRequested ? '读取' : '排序';
 	const phase = busy ? `正在${action}全部文件` : `${action}${searchPaused ? '已暂停' : '尚未完成'}`;
 	searchProgressText.textContent = listComplete
 		? `${action}完成：已检查 ${files.length} 个文件，找到 ${matches} 个匹配。`
@@ -618,6 +658,7 @@ function saveCollapsedFolders() {
 
 function renderFiles() {
 	updateDirectoryOptions();
+	updateTagOptions();
 	sortTimeDescOption.textContent = trashMode ? '删除时间：最新在前' : '上传时间：最新在前';
 	sortTimeAscOption.textContent = trashMode ? '删除时间：最早在前' : '上传时间：最早在前';
 	const query = searchInput.value.trim().toLocaleLowerCase();
@@ -796,12 +837,24 @@ function createFileRow(file) {
 		const path = document.createElement('p'); path.className = 'file-meta'; path.textContent = file.key;
 		details.append(path);
 	}
+	if (file.favorite || file.tags?.length) {
+		const labels = document.createElement('div'); labels.className = 'file-labels';
+		if (file.favorite) {
+			const favorite = document.createElement('span'); favorite.className = 'file-label favorite'; favorite.textContent = '★ 收藏'; labels.append(favorite);
+		}
+		for (const tag of file.tags || []) {
+			const label = document.createElement('span'); label.className = 'file-label'; label.textContent = tag; labels.append(label);
+		}
+		details.append(labels);
+	}
 
 	actions.className = 'file-actions';
 	actions.append(
 		createActionButton('复制地址', 'copy', () => copyText(file.url, '地址已复制')),
 		createActionButton('Markdown', 'markdown', () => copyText(`![](${file.url})`, 'Markdown 已复制')),
 		createOpenLink(file.url),
+		createActionButton(file.favorite ? '取消收藏' : '收藏', 'favorite', () => toggleFavorite(file)),
+		createActionButton('标签', 'tags', () => openTagsDialog(file)),
 		createActionButton('替换', 'replace', () => openReplaceDialog(file)),
 		createActionButton('历史', 'history', () => openVersionsDialog(file)),
 		createActionButton('重命名', 'rename', () => openRenameDialog(file)),
@@ -1121,6 +1174,78 @@ function closeRenameDialog() {
 	renameError.hidden = true;
 	renameError.textContent = '';
 	document.body.classList.remove('modal-open');
+}
+
+function normalizeTagInput(value) {
+	const tags = []; const seen = new Set();
+	for (const raw of value.split(/[,，]/)) {
+		const tag = raw.trim().normalize('NFC');
+		if (!tag) continue;
+		if ([...tag].length > 32 || /[\u0000-\u001f\u007f]/.test(tag)) return null;
+		const identity = tag.toLocaleLowerCase('zh-CN');
+		if (!seen.has(identity)) { seen.add(identity); tags.push(tag); }
+	}
+	return tags.length <= 12 ? tags : null;
+}
+
+function openTagsDialog(file) {
+	if (operationBusy || trashMode || !window.imageAccount.authorized) return;
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeReplaceDialog(true); closeVersionsDialog(true);
+	pendingTagsFile = { ...file, tags: [...(file.tags || [])] };
+	tagsKey.textContent = file.key; tagsInput.value = (file.tags || []).join('，'); tagsFavorite.checked = Boolean(file.favorite);
+	tagsError.hidden = true; tagsError.textContent = ''; confirmTagsButton.disabled = false; confirmTagsButton.textContent = '保存标签';
+	tagsDialog.hidden = false; document.body.classList.add('modal-open'); tagsInput.focus();
+}
+
+function closeTagsDialog(force = false) {
+	if (operationBusy && !force) return;
+	pendingTagsFile = null; tagsInput.value = ''; tagsFavorite.checked = false;
+	tagsError.hidden = true; tagsError.textContent = ''; tagsDialog.hidden = true; document.body.classList.remove('modal-open');
+}
+
+async function saveMetadata(file, tags, favorite) {
+	return requestFiles('/api/files', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+		action: 'metadata', key: file.key, expectedEtag: file.etag, expectedVersion: file.version, tags, favorite,
+	}) });
+}
+
+function applyMetadataResult(previousKey, nextFile) {
+	files = files.map((file) => file.key === previousKey ? nextFile : file);
+	// Metadata writes change the R2 object version, so retain only the new list snapshot.
+	renderFiles();
+}
+
+async function saveTags(event) {
+	event.preventDefault();
+	if (operationBusy || !pendingTagsFile) return;
+	const tags = normalizeTagInput(tagsInput.value);
+	if (tags === null) {
+		tagsError.textContent = '最多 12 个标签，每个最多 32 个字符，不能包含控制字符。'; tagsError.hidden = false; return;
+	}
+	const file = { ...pendingTagsFile, tags: [...(pendingTagsFile.tags || [])] };
+	operationBusy = true; cancelFileLoad(); searchPaused = true; confirmTagsButton.disabled = true; cancelTagsButton.disabled = true; confirmTagsButton.textContent = '保存中…';
+	try {
+		const result = await saveMetadata(file, tags, tagsFavorite.checked);
+		operationBusy = false; closeTagsDialog(); applyMetadataResult(file.key, result.file); showToast('标签已保存。');
+	} catch (error) {
+		tagsError.textContent = error.message || '保存失败，请刷新后重试。'; tagsError.hidden = false;
+	} finally {
+		operationBusy = false; confirmTagsButton.disabled = false; cancelTagsButton.disabled = false; confirmTagsButton.textContent = '保存标签'; setLoading(loadingFiles);
+		if (window.imageAccount.authorized) renderFiles();
+	}
+}
+
+async function toggleFavorite(file) {
+	if (operationBusy || trashMode || !window.imageAccount.authorized) return;
+	operationBusy = true; cancelFileLoad(); searchPaused = true; renderFiles();
+	try {
+		const result = await saveMetadata(file, [...(file.tags || [])], !file.favorite);
+		applyMetadataResult(file.key, result.file); showToast(result.file.favorite ? '已加入收藏。' : '已取消收藏。');
+	} catch (error) {
+		showManagerError(error.message || '收藏状态保存失败，请刷新后重试。');
+	} finally {
+		operationBusy = false; setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles();
+	}
 }
 
 function openReplaceDialog(file) {
@@ -1493,10 +1618,11 @@ window.addEventListener('image-auth-changed', (event) => {
 		files = []; cursor = null; selectedKeys.clear(); folderList.replaceChildren();
 		manager.hidden = true; selectionBar.hidden = true; searchProgress.hidden = true;
 		searchInput.value = ''; searchProgressText.textContent = ''; managerStatus.textContent = '';
-		directoryFilter.value = ''; formatFilter.value = ''; directoryScanRequested = false;
+		directoryFilter.value = ''; formatFilter.value = ''; tagFilter.value = ''; favoriteFilter.checked = false; directoryScanRequested = false;
 		sortOrder.value = 'time-desc';
 		updateDirectoryOptions();
-		closeImagePreview(); closeRenameDialog(); closeReplaceDialog(true); closeVersionsDialog(true); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
+		updateTagOptions();
+		closeImagePreview(); closeRenameDialog(); closeTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
 	}
 });
 

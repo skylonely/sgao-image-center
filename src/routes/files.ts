@@ -7,6 +7,8 @@ const MAX_PAGE_SIZE = 200;
 const MAX_KEY_LENGTH = 1024;
 const MAX_BATCH_DELETE = 50;
 const IMAGE_ORIGIN = 'https://img.sgao.cc';
+const MAX_TAGS = 12;
+const MAX_TAG_LENGTH = 32;
 
 function jsonResponse(data: unknown, status = 200, extraHeaders?: HeadersInit): Response {
 	const headers = new Headers(extraHeaders);
@@ -30,6 +32,36 @@ function isValidKey(key: string): boolean {
 	return isImageKey(key);
 }
 
+function tagsFromMetadata(metadata: Record<string, string> | undefined): string[] {
+	const value = metadata?.sgaoTags;
+	if (!value) return [];
+	try {
+		const parsed = JSON.parse(value);
+		return Array.isArray(parsed) ? parsed.filter((tag): tag is string => typeof tag === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
+function normalizeTags(value: unknown): string[] | null {
+	if (!Array.isArray(value) || value.length > MAX_TAGS) return null;
+	const seen = new Set<string>();
+	const tags: string[] = [];
+	for (const entry of value) {
+		if (typeof entry !== 'string') return null;
+		const tag = entry.trim().normalize('NFC');
+		if (!tag || [...tag].length > MAX_TAG_LENGTH || /[\u0000-\u001f\u007f]/.test(tag)) return null;
+		const identity = tag.toLocaleLowerCase('zh-CN');
+		if (seen.has(identity)) continue;
+		seen.add(identity); tags.push(tag);
+	}
+	return tags;
+}
+
+function isFavorite(metadata: Record<string, string> | undefined): boolean {
+	return metadata?.sgaoFavorite === '1';
+}
+
 function filenameFromKey(key: string): string {
 	return key.split('/').at(-1) ?? key;
 }
@@ -39,12 +71,55 @@ function fileRecord(object: R2Object, key = object.key) {
 		key,
 		url: imageUrlForKey(key),
 		size: object.size,
-		uploaded: object.uploaded.toISOString(),
+		uploaded: object.customMetadata?.uploadedAt ?? object.uploaded.toISOString(),
 		contentType: object.httpMetadata?.contentType ?? 'application/octet-stream',
 		originalFilename: object.customMetadata?.originalFilename ?? null,
 		etag: object.etag,
 		version: object.version,
+		tags: tagsFromMetadata(object.customMetadata),
+		favorite: isFavorite(object.customMetadata),
 	};
+}
+
+async function updateImageMetadata(values: Record<string, unknown>, env: Env): Promise<Response> {
+	const key = typeof values.key === 'string' ? values.key.replace(/^\/+/, '') : '';
+	const expectedEtag = typeof values.expectedEtag === 'string' ? values.expectedEtag : '';
+	const expectedVersion = typeof values.expectedVersion === 'string' ? values.expectedVersion : '';
+	const tags = normalizeTags(values.tags);
+	const favorite = values.favorite;
+	if (!isValidKey(key) || !expectedEtag || !expectedVersion || tags === null || typeof favorite !== 'boolean') {
+		return jsonResponse({ success: false, message: '标签或收藏请求无效。' }, 400);
+	}
+
+	try {
+		const source = await env.IMAGES.get(key);
+		if (!source || isDeletedImage(source)) {
+			if (source) await source.body.cancel();
+			return jsonResponse({ success: false, message: '图片不存在或已删除。' }, 404);
+		}
+		try {
+			if (source.etag !== expectedEtag || source.version !== expectedVersion) {
+				return jsonResponse({ success: false, code: 'FILE_CHANGED', message: '图片已在其他位置发生变化，请刷新后重试。' }, 409);
+			}
+			const customMetadata = { ...source.customMetadata };
+			if (tags.length) customMetadata.sgaoTags = JSON.stringify(tags);
+			else delete customMetadata.sgaoTags;
+			if (favorite) customMetadata.sgaoFavorite = '1';
+			else delete customMetadata.sgaoFavorite;
+			const written = await env.IMAGES.put(key, source.body, {
+				httpMetadata: source.httpMetadata,
+				customMetadata,
+				onlyIf: { etagMatches: expectedEtag },
+			});
+			if (!written) return jsonResponse({ success: false, code: 'FILE_CHANGED', message: '图片在保存标签期间发生变化，请刷新后重试。' }, 409);
+			return jsonResponse({ success: true, file: fileRecord(written, key) });
+		} finally {
+			if (!source.bodyUsed) await source.body.cancel();
+		}
+	} catch (error) {
+		console.error('Failed to update image metadata:', error);
+		return jsonResponse({ success: false, message: '保存标签或收藏失败。' }, 500);
+	}
 }
 
 function normalizeNewFilename(value: unknown): string | null {
@@ -258,6 +333,7 @@ async function renameFile(request: Request, env: Env): Promise<Response> {
 	}
 
 	const values = typeof body === 'object' && body !== null ? body : {};
+	if ('action' in values && values.action === 'metadata') return updateImageMetadata(values as Record<string, unknown>, env);
 	const key = 'key' in values && typeof values.key === 'string' ? values.key.replace(/^\/+/, '') : '';
 	const newFilename = normalizeNewFilename('newFilename' in values ? values.newFilename : null);
 	const expectedEtag = 'expectedEtag' in values && typeof values.expectedEtag === 'string' ? values.expectedEtag : '';
