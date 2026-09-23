@@ -658,6 +658,7 @@ select:focus {
 .search-progress p { margin: 0; flex: 1 1 220px; }
 .search-progress button { flex: none; }
 
+.manager-status.success,
 .manager-status.loading,
 .manager-status.error {
 	margin-top: 18px;
@@ -668,6 +669,12 @@ select:focus {
 .manager-status.loading {
 	color: #344054;
 	background: #f2f4f7;
+}
+
+.manager-status.success {
+	color: #027a48;
+	background: #ecfdf3;
+	border: 1px solid #abefc6;
 }
 
 .manager-status.error {

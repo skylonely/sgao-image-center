@@ -1848,11 +1848,22 @@ async function submitTrashBatch(event) {
 	const snapshot = pendingTrashBatchFiles.map((file) => ({ ...file }));
 	const generation = trashBatchGeneration;
 	let succeeded = 0, failed = 0, cleanupPending = 0;
+	let pageResult = '';
+	let pageResultIsError = false;
+	const failureDetails = [];
 	operationBusy = true; cancelFileLoad(); searchPaused = true;
 	confirmTrashBatchButton.disabled = true; confirmTrashBatchButton.textContent = '处理中…';
 	cancelTrashBatchButton.disabled = true; trashBatchAcknowledged.disabled = true;
 	trashBatchError.hidden = true; trashBatchSummary.textContent = `正在处理 0 / ${snapshot.length} 张，请勿关闭页面。`;
 	renderFiles(); setLoading(loadingFiles);
+	if (action === 'purge') {
+		trashBatchDialog.hidden = true;
+		document.body.classList.remove('modal-open');
+		managerStatus.className = 'manager-status loading';
+		managerStatus.textContent = `正在彻底删除 0 / ${snapshot.length} 张图片，请勿关闭页面。`;
+		managerStatus.setAttribute('tabindex', '-1');
+		managerStatus.focus();
+	}
 	try {
 		for (const [index, file] of snapshot.entries()) {
 			if (generation !== trashBatchGeneration || !window.imageAccount.authorized) return;
@@ -1875,18 +1886,41 @@ async function submitTrashBatch(event) {
 			} catch (error) {
 				if (generation !== trashBatchGeneration || !window.imageAccount.authorized) return;
 				failed += 1; item.setAttribute('data-state', 'failed');
-				item.textContent = `未完成：${file.key} — ${error.message || '结果未确认，请刷新核对后再操作。'}`;
+				const message = error.message || '结果未确认，请刷新核对后再操作。';
+				failureDetails.push(`${file.key}：${message}`);
+				item.textContent = `未完成：${file.key} — ${message}`;
 			}
 			trashBatchSummary.textContent = `已处理 ${index + 1} / ${snapshot.length} 张。`;
+			if (action === 'purge') managerStatus.textContent = `正在彻底删除 ${index + 1} / ${snapshot.length} 张图片，请勿关闭页面。`;
 			renderFiles();
 		}
 		trashBatchFinished = true;
 		trashBatchSummary.textContent = `已${action === 'restore' ? '恢复' : '彻底删除'} ${succeeded} 张，未完成 ${failed} 张${cleanupPending ? `；${cleanupPending} 张副本待清理` : ''}。${failed ? '未完成项保持勾选，请刷新核对后再试。' : ''}`;
-		confirmTrashBatchButton.hidden = true; cancelTrashBatchButton.textContent = '关闭';
+		if (action === 'purge') {
+			pageResult = trashBatchSummary.textContent + (failureDetails.length ? ` 失败详情：${failureDetails.slice(0, 3).join('；')}${failureDetails.length > 3 ? '；其余请刷新核对。' : ''}` : '');
+			pageResultIsError = failed > 0;
+			closeTrashBatchDialog(true);
+		} else {
+			confirmTrashBatchButton.hidden = true; cancelTrashBatchButton.textContent = '关闭';
+		}
+	} catch (error) {
+		if (action === 'purge') {
+			pageResult = `批量彻底删除中断：${error.message || '未知错误'}。请刷新核对后再操作。`;
+			pageResultIsError = true;
+			closeTrashBatchDialog(true);
+		} else {
+			trashBatchError.textContent = error.message || '处理失败，请刷新核对。'; trashBatchError.hidden = false;
+		}
 	} finally {
 		operationBusy = false; trashBatchAcknowledged.disabled = false; cancelTrashBatchButton.disabled = false;
 		setLoading(loadingFiles);
-		if (window.imageAccount.authorized) renderFiles();
+		if (window.imageAccount.authorized) {
+			renderFiles();
+			if (action === 'purge' && pageResult) {
+				managerStatus.className = pageResultIsError ? 'manager-status error' : 'manager-status success';
+				managerStatus.textContent = pageResult;
+			}
+		}
 	}
 }
 

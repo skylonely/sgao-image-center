@@ -83,7 +83,37 @@ test('batch permanent deletion requires explicit acknowledgment and uses each re
 	assert.deepEqual(JSON.parse(h.requests[0].options.body), { id: sample.id, confirmation: 'DELETE' });
 	assert.equal(h.run('files.length'), 0);
 	assert.equal(h.run('selectedKeys.size'), 0);
-	assert.equal(h.nodes.get('#confirmTrashBatchButton').hidden, true);
+	assert.equal(h.nodes.get('#trashBatchDialog').hidden, true);
+	assert.match(h.nodes.get('#managerStatus').textContent, /已彻底删除 1 张，未完成 0 张/);
+	assert.equal(h.nodes.get('#managerStatus').className, 'manager-status success');
+});
+test('bulk purge closes the dialog immediately while the request is pending', async () => {
+	let finishRequest;
+	const pending = new Promise((resolve) => { finishRequest = resolve; });
+	const h = harness(async () => pending);
+	h.run(`trashMode=true; files=[${JSON.stringify(sample)}]; selectedKeys.add(files[0].id); openTrashBatchDialog('purge');`);
+	h.nodes.get('#trashBatchAcknowledged').checked = true;
+	const operation = h.run('submitTrashBatch({preventDefault(){}})');
+	assert.equal(h.requests.length, 1);
+	assert.equal(h.nodes.get('#trashBatchDialog').hidden, true);
+	assert.match(h.nodes.get('#managerStatus').textContent, /正在彻底删除 0 \/ 1/);
+	finishRequest(Response.json({ success: true }));
+	await operation;
+	assert.match(h.nodes.get('#managerStatus').textContent, /已彻底删除 1 张/);
+});
+test('bulk purge reports failures on the page and keeps failed records selected', async () => {
+	const second = { ...sample, id: '22222222-2222-4222-8222-222222222222', key: 'travel/other.png' };
+	const h = harness(async (url, options) => JSON.parse(options.body).id === second.id
+		? Response.json({ success: false, message: '回收记录不可用' }, { status: 409 })
+		: Response.json({ success: true }));
+	h.run(`trashMode=true; files=${JSON.stringify([sample, second])}; selectedKeys=new Set(files.map(file=>file.id)); openTrashBatchDialog('purge');`);
+	h.nodes.get('#trashBatchAcknowledged').checked = true;
+	await h.run('submitTrashBatch({preventDefault(){}})');
+	assert.equal(h.nodes.get('#trashBatchDialog').hidden, true);
+	assert.equal(h.run('files.length'), 1);
+	assert.equal(h.run('selectedKeys.size'), 1);
+	assert.equal(h.nodes.get('#managerStatus').className, 'manager-status error');
+	assert.match(h.nodes.get('#managerStatus').textContent, /回收记录不可用/);
 });
 test('does not accept a stale files response after switching to recycle bin', async () => {
 	let resolve;
