@@ -105,6 +105,7 @@
 					<div class="selection-actions">
 						<button id="clearSelectionButton" class="toolbar-button" type="button">取消选择</button>
 						<button id="batchExportButton" class="toolbar-button" type="button">导出所选</button>
+						<button id="batchTagsButton" class="toolbar-button" type="button">编辑标签</button>
 						<button id="batchMoveButton" class="toolbar-button" type="button">移动所选</button>
 						<button id="batchDeleteButton" class="toolbar-button danger" type="button">删除所选</button>
 					</div>
@@ -227,6 +228,32 @@
 				<div class="dialog-actions">
 					<button id="cancelTagsButton" class="dialog-button" type="button">取消</button>
 					<button id="confirmTagsButton" class="dialog-button primary-choice" type="submit">保存标签</button>
+				</div>
+			</form>
+		</div>
+
+		<div id="batchTagsDialog" class="modal-backdrop" hidden>
+			<form id="batchTagsForm" class="delete-dialog move-dialog batch-tags-dialog" role="dialog" aria-modal="true" aria-labelledby="batchTagsTitle" aria-describedby="batchTagsDescription">
+				<h2 id="batchTagsTitle">批量编辑标签与收藏</h2>
+				<p id="batchTagsDescription">只修改下面指定的内容；未指定的标签和收藏状态保持不变。</p>
+				<label class="rename-label" for="batchAddTagsInput">添加标签</label>
+				<input id="batchAddTagsInput" type="text" maxlength="400" autocomplete="off" placeholder="例如：旅行，证件" />
+				<p class="help-text">使用逗号分隔；不会重复添加已有标签。</p>
+				<label class="rename-label" for="batchRemoveTagsInput">移除标签</label>
+				<input id="batchRemoveTagsInput" type="text" maxlength="400" autocomplete="off" placeholder="例如：待整理" />
+				<p class="help-text">只移除完全匹配的标签；同一标签不能同时添加和移除。</p>
+				<label class="rename-label" for="batchFavoriteAction">收藏状态</label>
+				<select id="batchFavoriteAction">
+					<option value="keep">保持不变</option>
+					<option value="favorite">设为收藏</option>
+					<option value="unfavorite">取消收藏</option>
+				</select>
+				<p id="batchTagsError" class="rename-error" role="alert" hidden></p>
+				<p id="batchTagsSummary" class="move-summary" role="status" aria-live="polite"></p>
+				<ul id="batchTagsResults" class="move-results" aria-label="逐张标签编辑结果"></ul>
+				<div class="dialog-actions">
+					<button id="cancelBatchTagsButton" class="dialog-button" type="button">取消</button>
+					<button id="confirmBatchTagsButton" class="dialog-button primary-choice" type="submit">应用修改</button>
 				</div>
 			</form>
 		</div>

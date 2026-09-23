@@ -81,45 +81,103 @@ function fileRecord(object: R2Object, key = object.key) {
 	};
 }
 
-async function updateImageMetadata(values: Record<string, unknown>, env: Env): Promise<Response> {
+class MetadataUpdateError extends Error {
+	constructor(message: string, readonly status: number, readonly code?: string) {
+		super(message);
+	}
+}
+
+type MetadataUpdate = {
+	key: string;
+	expectedEtag: string;
+	expectedVersion: string;
+	tags: string[];
+	favorite: boolean;
+};
+
+function parseMetadataUpdate(values: Record<string, unknown>): MetadataUpdate | null {
 	const key = typeof values.key === 'string' ? values.key.replace(/^\/+/, '') : '';
 	const expectedEtag = typeof values.expectedEtag === 'string' ? values.expectedEtag : '';
 	const expectedVersion = typeof values.expectedVersion === 'string' ? values.expectedVersion : '';
 	const tags = normalizeTags(values.tags);
 	const favorite = values.favorite;
-	if (!isValidKey(key) || !expectedEtag || !expectedVersion || tags === null || typeof favorite !== 'boolean') {
+	return isValidKey(key) && expectedEtag && expectedVersion && tags !== null && typeof favorite === 'boolean'
+		? { key, expectedEtag, expectedVersion, tags, favorite }
+		: null;
+}
+
+async function persistImageMetadata(update: MetadataUpdate, env: Env): Promise<ReturnType<typeof fileRecord>> {
+	const source = await env.IMAGES.get(update.key);
+	if (!source || isDeletedImage(source)) {
+		if (source) await source.body.cancel();
+		throw new MetadataUpdateError('图片不存在或已删除。', 404, 'FILE_NOT_FOUND');
+	}
+	try {
+		if (source.etag !== update.expectedEtag || source.version !== update.expectedVersion) {
+			throw new MetadataUpdateError('图片已在其他位置发生变化，请刷新后重试。', 409, 'FILE_CHANGED');
+		}
+		const customMetadata = { ...source.customMetadata };
+		if (update.tags.length) customMetadata.sgaoTags = JSON.stringify(update.tags);
+		else delete customMetadata.sgaoTags;
+		if (update.favorite) customMetadata.sgaoFavorite = '1';
+		else delete customMetadata.sgaoFavorite;
+		const written = await env.IMAGES.put(update.key, source.body, {
+			httpMetadata: source.httpMetadata,
+			customMetadata,
+			onlyIf: { etagMatches: update.expectedEtag },
+		});
+		if (!written) throw new MetadataUpdateError('图片在保存标签期间发生变化，请刷新后重试。', 409, 'FILE_CHANGED');
+		return fileRecord(written, update.key);
+	} finally {
+		if (!source.bodyUsed) await source.body.cancel();
+	}
+}
+
+async function updateImageMetadata(values: Record<string, unknown>, env: Env): Promise<Response> {
+	const update = parseMetadataUpdate(values);
+	if (!update) {
 		return jsonResponse({ success: false, message: '标签或收藏请求无效。' }, 400);
 	}
 
 	try {
-		const source = await env.IMAGES.get(key);
-		if (!source || isDeletedImage(source)) {
-			if (source) await source.body.cancel();
-			return jsonResponse({ success: false, message: '图片不存在或已删除。' }, 404);
-		}
-		try {
-			if (source.etag !== expectedEtag || source.version !== expectedVersion) {
-				return jsonResponse({ success: false, code: 'FILE_CHANGED', message: '图片已在其他位置发生变化，请刷新后重试。' }, 409);
-			}
-			const customMetadata = { ...source.customMetadata };
-			if (tags.length) customMetadata.sgaoTags = JSON.stringify(tags);
-			else delete customMetadata.sgaoTags;
-			if (favorite) customMetadata.sgaoFavorite = '1';
-			else delete customMetadata.sgaoFavorite;
-			const written = await env.IMAGES.put(key, source.body, {
-				httpMetadata: source.httpMetadata,
-				customMetadata,
-				onlyIf: { etagMatches: expectedEtag },
-			});
-			if (!written) return jsonResponse({ success: false, code: 'FILE_CHANGED', message: '图片在保存标签期间发生变化，请刷新后重试。' }, 409);
-			return jsonResponse({ success: true, file: fileRecord(written, key) });
-		} finally {
-			if (!source.bodyUsed) await source.body.cancel();
-		}
+		return jsonResponse({ success: true, file: await persistImageMetadata(update, env) });
 	} catch (error) {
+		if (error instanceof MetadataUpdateError) return jsonResponse({ success: false, code: error.code, message: error.message }, error.status);
 		console.error('Failed to update image metadata:', error);
 		return jsonResponse({ success: false, message: '保存标签或收藏失败。' }, 500);
 	}
+}
+
+async function updateImagesMetadata(values: Record<string, unknown>, env: Env): Promise<Response> {
+	const requested = Array.isArray(values.files) ? values.files : [];
+	if (!requested.length || requested.length > MAX_BATCH_DELETE) {
+		return jsonResponse({ success: false, message: '单次请选择 1 至 50 张图片。' }, 400);
+	}
+	const updates: MetadataUpdate[] = [];
+	const keys = new Set<string>();
+	for (const value of requested) {
+		const update = typeof value === 'object' && value !== null ? parseMetadataUpdate(value as Record<string, unknown>) : null;
+		if (!update || keys.has(update.key)) {
+			return jsonResponse({ success: false, message: '图片标签、路径或版本无效，请刷新后重新选择。' }, 400);
+		}
+		keys.add(update.key);
+		updates.push(update);
+	}
+
+	const updated: { previousKey: string; file: ReturnType<typeof fileRecord> }[] = [];
+	const failed: { key: string; code?: string; message: string }[] = [];
+	for (const update of updates) {
+		try {
+			updated.push({ previousKey: update.key, file: await persistImageMetadata(update, env) });
+		} catch (error) {
+			if (error instanceof MetadataUpdateError) failed.push({ key: update.key, code: error.code, message: error.message });
+			else {
+				console.error(`Failed to update metadata for ${update.key}:`, error);
+				failed.push({ key: update.key, message: '保存失败，请刷新检查。' });
+			}
+		}
+	}
+	return jsonResponse({ success: true, updated, failed });
 }
 
 function normalizeNewFilename(value: unknown): string | null {
@@ -494,6 +552,16 @@ async function moveFiles(request: Request, env: Env): Promise<Response> {
 	return jsonResponse({ success: true, moved, skipped, failed });
 }
 
+async function postFiles(request: Request, env: Env): Promise<Response> {
+	let body: unknown;
+	try { body = await request.clone().json(); }
+	catch { return jsonResponse({ success: false, message: '无效的 JSON。' }, 400); }
+	if (typeof body === 'object' && body !== null && 'action' in body && body.action === 'metadata-batch') {
+		return updateImagesMetadata(body as Record<string, unknown>, env);
+	}
+	return moveFiles(request, env);
+}
+
 export async function handleFiles(request: Request, env: Env): Promise<Response> {
 	const identity = await authorizeImageRequest(request, env);
 	if (identity instanceof Response) return identity;
@@ -514,7 +582,7 @@ export async function handleFiles(request: Request, env: Env): Promise<Response>
 			case 'PATCH':
 				return renameFile(request, env);
 			case 'POST':
-				return moveFiles(request, env);
+				return postFiles(request, env);
 
 			default:
 				return jsonResponse(

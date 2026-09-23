@@ -37,6 +37,7 @@ const clearSelectionButton = document.querySelector('#clearSelectionButton');
 const batchDeleteButton = document.querySelector('#batchDeleteButton');
 const batchMoveButton = document.querySelector('#batchMoveButton');
 const batchExportButton = document.querySelector('#batchExportButton');
+const batchTagsButton = document.querySelector('#batchTagsButton');
 const exportDialog = document.querySelector('#exportDialog');
 const exportForm = document.querySelector('#exportForm');
 const exportSummary = document.querySelector('#exportSummary');
@@ -77,6 +78,16 @@ const tagsFavorite = document.querySelector('#tagsFavorite');
 const tagsError = document.querySelector('#tagsError');
 const cancelTagsButton = document.querySelector('#cancelTagsButton');
 const confirmTagsButton = document.querySelector('#confirmTagsButton');
+const batchTagsDialog = document.querySelector('#batchTagsDialog');
+const batchTagsForm = document.querySelector('#batchTagsForm');
+const batchAddTagsInput = document.querySelector('#batchAddTagsInput');
+const batchRemoveTagsInput = document.querySelector('#batchRemoveTagsInput');
+const batchFavoriteAction = document.querySelector('#batchFavoriteAction');
+const batchTagsError = document.querySelector('#batchTagsError');
+const batchTagsSummary = document.querySelector('#batchTagsSummary');
+const batchTagsResults = document.querySelector('#batchTagsResults');
+const cancelBatchTagsButton = document.querySelector('#cancelBatchTagsButton');
+const confirmBatchTagsButton = document.querySelector('#confirmBatchTagsButton');
 const replaceDialog = document.querySelector('#replaceDialog');
 const replaceForm = document.querySelector('#replaceForm');
 const replaceKey = document.querySelector('#replaceKey');
@@ -113,6 +124,9 @@ let cursor = null;
 let pendingDeleteKeys = [];
 let pendingRenameFile = null;
 let pendingTagsFile = null;
+let pendingBatchTagFiles = [];
+let batchTagsFinished = false;
+let batchTagsGeneration = 0;
 let pendingReplaceFile = null;
 let pendingVersionFile = null;
 let pendingRestoreVersion = null;
@@ -153,7 +167,7 @@ function switchView(nextTrashMode) {
 	cancelFileLoad();
 	listComplete = false; searchPaused = false;
 	files = []; cursor = null; selectedKeys.clear();
-	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeMoveDialog(); closeExportDialog(true);
+	closeImagePreview(); closeDeleteDialog(); closeRenameDialog(); closeTagsDialog(true); closeBatchTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeMoveDialog(); closeExportDialog(true);
 	activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
 	trashFilesButton.setAttribute('aria-pressed', String(trashMode));
 	trashNotice.hidden = !trashMode;
@@ -202,6 +216,7 @@ clearSelectionButton.addEventListener('click', clearSelection);
 batchDeleteButton.addEventListener('click', () => openDeleteDialog([...selectedKeys]));
 batchMoveButton.addEventListener('click', openMoveDialog);
 batchExportButton.addEventListener('click', () => openExportDialog('selected'));
+batchTagsButton.addEventListener('click', openBatchTagsDialog);
 cancelExportButton.addEventListener('click', cancelExport);
 exportForm.addEventListener('submit', exportSelectedFiles);
 exportDialog.addEventListener('click', (event) => { if (event.target === exportDialog) cancelExport(); });
@@ -218,6 +233,9 @@ renameForm.addEventListener('submit', renameFile);
 cancelTagsButton.addEventListener('click', () => closeTagsDialog());
 tagsForm.addEventListener('submit', saveTags);
 tagsDialog.addEventListener('click', (event) => { if (event.target === tagsDialog) closeTagsDialog(); });
+cancelBatchTagsButton.addEventListener('click', () => closeBatchTagsDialog());
+batchTagsForm.addEventListener('submit', saveBatchTags);
+batchTagsDialog.addEventListener('click', (event) => { if (event.target === batchTagsDialog) closeBatchTagsDialog(); });
 cancelReplaceButton.addEventListener('click', () => closeReplaceDialog());
 replaceForm.addEventListener('submit', replaceFile);
 replaceInput.addEventListener('change', updateReplaceSelection);
@@ -239,6 +257,10 @@ renameDialog.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+	if (!batchTagsDialog.hidden) {
+		if (event.key === 'Escape') closeBatchTagsDialog();
+		return;
+	}
 	if (!tagsDialog.hidden) {
 		if (event.key === 'Escape') closeTagsDialog();
 		return;
@@ -876,8 +898,10 @@ function updateSelectionUI() {
 	batchDeleteButton.textContent = `删除所选（${selectedKeys.size}）`;
 	batchMoveButton.textContent = `移动所选（${selectedKeys.size}）`;
 	batchExportButton.textContent = `导出所选（${selectedKeys.size}）`;
+	batchTagsButton.textContent = `编辑标签（${selectedKeys.size}）`;
 	batchMoveButton.disabled = operationBusy;
 	batchExportButton.disabled = operationBusy;
+	batchTagsButton.disabled = operationBusy;
 	batchDeleteButton.disabled = operationBusy;
 	clearSelectionButton.disabled = operationBusy;
 	selectVisibleButton.textContent =
@@ -920,13 +944,128 @@ function clearSelection() {
 	renderFiles();
 }
 
+function openBatchTagsDialog() {
+	if (operationBusy || trashMode || !window.imageAccount.authorized || !selectedKeys.size) return;
+	const selected = files.filter((file) => selectedKeys.has(file.key));
+	if (!selected.length || selected.length > MAX_BATCH_DELETE) return;
+	closeImagePreview(); closeRenameDialog(); closeTagsDialog(true); closeDeleteDialog(); closeMoveDialog(); closeExportDialog(true);
+	pendingBatchTagFiles = selected.map((file) => ({ ...file, tags: [...(file.tags || [])] }));
+	batchTagsGeneration += 1; batchTagsFinished = false;
+	batchAddTagsInput.value = ''; batchRemoveTagsInput.value = ''; batchFavoriteAction.value = 'keep';
+	batchAddTagsInput.disabled = false; batchRemoveTagsInput.disabled = false; batchFavoriteAction.disabled = false;
+	batchTagsError.hidden = true; batchTagsError.textContent = ''; batchTagsResults.replaceChildren();
+	batchTagsSummary.textContent = `已选择 ${pendingBatchTagFiles.length} 张图片。成功项会取消选择，失败项会继续保留。`;
+	confirmBatchTagsButton.hidden = false; confirmBatchTagsButton.disabled = false; confirmBatchTagsButton.textContent = '应用修改';
+	cancelBatchTagsButton.disabled = false; cancelBatchTagsButton.textContent = '取消';
+	batchTagsDialog.hidden = false; document.body.classList.add('modal-open'); batchAddTagsInput.focus();
+}
+
+function closeBatchTagsDialog(force = false) {
+	if (operationBusy && !force) return;
+	batchTagsGeneration += 1; pendingBatchTagFiles = []; batchTagsFinished = false;
+	batchAddTagsInput.value = ''; batchRemoveTagsInput.value = ''; batchFavoriteAction.value = 'keep';
+	batchTagsError.hidden = true; batchTagsError.textContent = ''; batchTagsSummary.textContent = ''; batchTagsResults.replaceChildren();
+	batchTagsDialog.hidden = true; document.body.classList.remove('modal-open');
+	if (window.imageAccount.authorized && batchTagsButton.isConnected) batchTagsButton.focus();
+}
+
+function batchMetadataForFile(file, addTags, removeTags, favoriteAction) {
+	const remove = new Set(removeTags.map((tag) => tag.toLocaleLowerCase('zh-CN')));
+	const seen = new Set(); const tags = [];
+	for (const original of file.tags || []) {
+		const tag = String(original).trim().normalize('NFC'); const identity = tag.toLocaleLowerCase('zh-CN');
+		if (tag && !remove.has(identity) && !seen.has(identity)) { seen.add(identity); tags.push(tag); }
+	}
+	for (const tag of addTags) {
+		const identity = tag.toLocaleLowerCase('zh-CN');
+		if (!seen.has(identity)) { seen.add(identity); tags.push(tag); }
+	}
+	if (tags.length > 12) return null;
+	const favorite = favoriteAction === 'favorite' ? true : favoriteAction === 'unfavorite' ? false : Boolean(file.favorite);
+	return { tags, favorite };
+}
+
+function renderBatchTagsResults(snapshot, updated, failed) {
+	batchTagsResults.replaceChildren();
+	for (const file of snapshot) {
+		const item = document.createElement('li'); const next = updated.get(file.key); const failure = failed.get(file.key);
+		item.setAttribute('data-state', next ? 'updated' : 'failed');
+		item.textContent = next
+			? `已更新：${file.key}（${next.tags?.length || 0} 个标签${next.favorite ? ' · 已收藏' : ''}）`
+			: `未完成：${file.key} — ${failure?.message || '结果未确认，请刷新检查。'}`;
+		batchTagsResults.append(item);
+	}
+}
+
+async function saveBatchTags(event) {
+	event.preventDefault();
+	if (operationBusy || batchTagsFinished || !pendingBatchTagFiles.length || !window.imageAccount.authorized) return;
+	const addTags = normalizeTagInput(batchAddTagsInput.value); const removeTags = normalizeTagInput(batchRemoveTagsInput.value);
+	if (addTags === null || removeTags === null) {
+		batchTagsError.textContent = '每组最多 12 个标签，每个最多 32 个字符，不能包含控制字符。'; batchTagsError.hidden = false; return;
+	}
+	const removeIdentities = new Set(removeTags.map((tag) => tag.toLocaleLowerCase('zh-CN')));
+	if (addTags.some((tag) => removeIdentities.has(tag.toLocaleLowerCase('zh-CN')))) {
+		batchTagsError.textContent = '同一标签不能同时添加和移除。'; batchTagsError.hidden = false; return;
+	}
+	if (!addTags.length && !removeTags.length && batchFavoriteAction.value === 'keep') {
+		batchTagsError.textContent = '请至少添加或移除一个标签，或者修改收藏状态。'; batchTagsError.hidden = false; return;
+	}
+
+	const snapshot = pendingBatchTagFiles.map((file) => ({ ...file, tags: [...(file.tags || [])] }));
+	const generation = batchTagsGeneration; const localFailed = new Map(); const requestEntries = [];
+	for (const file of snapshot) {
+		const metadata = batchMetadataForFile(file, addTags, removeTags, batchFavoriteAction.value);
+		if (!metadata) localFailed.set(file.key, { key: file.key, message: '添加后会超过 12 个标签，请先移除部分标签。' });
+		else requestEntries.push({ key: file.key, expectedEtag: file.etag, expectedVersion: file.version, ...metadata });
+	}
+	if (!requestEntries.length) {
+		renderBatchTagsResults(snapshot, new Map(), localFailed); batchTagsSummary.textContent = `已更新 0 张，未完成 ${localFailed.size} 张。未完成项保持勾选。`;
+		batchTagsFinished = true; confirmBatchTagsButton.hidden = true; cancelBatchTagsButton.textContent = '关闭'; return;
+	}
+
+	operationBusy = true; cancelFileLoad(); searchPaused = true;
+	confirmBatchTagsButton.disabled = true; confirmBatchTagsButton.textContent = '处理中…'; cancelBatchTagsButton.disabled = true;
+	batchAddTagsInput.disabled = true; batchRemoveTagsInput.disabled = true; batchFavoriteAction.disabled = true;
+	batchTagsError.hidden = true; batchTagsSummary.textContent = `正在处理 ${snapshot.length} 张图片，请勿关闭页面。`; renderFiles();
+	try {
+		const result = await requestFiles('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'metadata-batch', files: requestEntries }) });
+		if (generation !== batchTagsGeneration || !window.imageAccount.authorized) return;
+		if (!Array.isArray(result.updated) || !Array.isArray(result.failed)) throw new Error('批量标签结果无法解析，请刷新后检查。');
+		const updated = new Map(result.updated.map((entry) => [entry.previousKey, entry.file]));
+		const failed = new Map([...localFailed, ...result.failed.map((entry) => [entry.key, entry])]);
+		for (const entry of requestEntries) if (!updated.has(entry.key) && !failed.has(entry.key)) failed.set(entry.key, { key: entry.key, message: '服务器未返回处理结果，请刷新检查。' });
+		files = files.map((file) => updated.get(file.key) || file);
+		for (const key of updated.keys()) selectedKeys.delete(key);
+		renderBatchTagsResults(snapshot, updated, failed);
+		batchTagsSummary.textContent = `已更新 ${updated.size} 张，未完成 ${failed.size} 张。未完成项保持勾选；请检查结果后刷新列表。`;
+		batchTagsFinished = true; confirmBatchTagsButton.hidden = true; cancelBatchTagsButton.textContent = '关闭';
+	} catch (error) {
+		if (generation !== batchTagsGeneration || !window.imageAccount.authorized) return;
+		if (error.status === 400) {
+			batchTagsError.textContent = error.message; batchTagsError.hidden = false; batchTagsSummary.textContent = '请求未执行，请检查输入后重试。';
+			batchAddTagsInput.disabled = false; batchRemoveTagsInput.disabled = false; batchFavoriteAction.disabled = false; confirmBatchTagsButton.disabled = false;
+			return;
+		}
+		batchTagsError.textContent = `${error.message || '请求失败。'} 如果请求已发送，部分图片可能已经更新；请刷新检查，勿直接重复提交。`;
+		batchTagsError.hidden = false; batchTagsSummary.textContent = '批量编辑结果未确认。'; cursor = null; listComplete = false;
+		batchTagsFinished = true; confirmBatchTagsButton.hidden = true; cancelBatchTagsButton.textContent = '关闭';
+	} finally {
+		if (generation === batchTagsGeneration) {
+			operationBusy = false; cancelBatchTagsButton.disabled = false; confirmBatchTagsButton.textContent = '应用修改';
+			setLoading(loadingFiles); if (window.imageAccount.authorized) renderFiles(); cancelBatchTagsButton.focus();
+		}
+	}
+}
+
 function openExportDialog(scope) {
 	if (operationBusy || trashMode || !window.imageAccount.authorized) return;
 	if (scope === 'current' && !listComplete) { showToast('请先读取完整结果后再导出当前结果。'); return; }
 	const source = scope === 'selected' ? files.filter((file) => selectedKeys.has(file.key)) : renderedFiles;
 	if (!source.length) { showToast('没有可导出的图片。'); return; }
 	if (source.length > MAX_EXPORT_FILES) { showToast(`单次最多导出 ${MAX_EXPORT_FILES} 张图片，请先缩小筛选范围。`); return; }
-	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeMoveDialog();
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeMoveDialog(); closeBatchTagsDialog(true);
 	pendingExportFiles = source.map((file) => ({ ...file })); exportGeneration += 1;
 	exportError.hidden = true; exportError.textContent = ''; exportProgress.textContent = '';
 	const expectedBytes = pendingExportFiles.reduce((total, file) => total + (Number(file.size) || 0), 0);
@@ -983,7 +1122,7 @@ async function exportSelectedFiles(event) {
 
 function openMoveDialog() {
 	if (operationBusy || trashMode || !window.imageAccount.authorized || !selectedKeys.size) return;
-	closeImagePreview(); closeRenameDialog(); closeDeleteDialog();
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeBatchTagsDialog(true);
 	pendingMoveFiles = files.filter((file) => selectedKeys.has(file.key)).map((file) => ({ ...file }));
 	if (!pendingMoveFiles.length || pendingMoveFiles.length > 50) return;
 	moveGeneration += 1; moveFinished = false;
@@ -1190,7 +1329,7 @@ function normalizeTagInput(value) {
 
 function openTagsDialog(file) {
 	if (operationBusy || trashMode || !window.imageAccount.authorized) return;
-	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeReplaceDialog(true); closeVersionsDialog(true);
+	closeImagePreview(); closeRenameDialog(); closeDeleteDialog(); closeBatchTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true);
 	pendingTagsFile = { ...file, tags: [...(file.tags || [])] };
 	tagsKey.textContent = file.key; tagsInput.value = (file.tags || []).join('，'); tagsFavorite.checked = Boolean(file.favorite);
 	tagsError.hidden = true; tagsError.textContent = ''; confirmTagsButton.disabled = false; confirmTagsButton.textContent = '保存标签';
@@ -1622,7 +1761,7 @@ window.addEventListener('image-auth-changed', (event) => {
 		sortOrder.value = 'time-desc';
 		updateDirectoryOptions();
 		updateTagOptions();
-		closeImagePreview(); closeRenameDialog(); closeTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
+		closeImagePreview(); closeRenameDialog(); closeTagsDialog(true); closeBatchTagsDialog(true); closeReplaceDialog(true); closeVersionsDialog(true); closeDeleteDialog(); closeMoveDialog(true); closeExportDialog(true);
 	}
 });
 

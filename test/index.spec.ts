@@ -406,6 +406,50 @@ describe('image center worker', () => {
 		expect((await env.IMAGES.head(key))?.customMetadata?.sgaoTags).toBeUndefined();
 	});
 
+	it('batch edits tags and favorites while retaining stale files as explicit failures', async () => {
+		const goodKey = `${uploadTestPrefix}batch-tags-good.png`;
+		const staleKey = `${uploadTestPrefix}batch-tags-stale.png`;
+		const goodBytes = new Uint8Array([...pngSignature, 21]);
+		await env.IMAGES.put(goodKey, goodBytes, {
+			httpMetadata: { contentType: 'image/png' },
+			customMetadata: { sgaoTags: '["旅行"]', uploadedAt: '2026-09-23T00:00:00Z' },
+		});
+		await env.IMAGES.put(staleKey, new Uint8Array([...pngSignature, 22]), { httpMetadata: { contentType: 'image/png' } });
+		const good = await env.IMAGES.head(goodKey); const stale = await env.IMAGES.head(staleKey);
+		await env.IMAGES.put(staleKey, new Uint8Array([...pngSignature, 23]), { httpMetadata: { contentType: 'image/png' } });
+
+		const response = await ownerFetch('https://example.com/api/files', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'metadata-batch', files: [
+				{ key: goodKey, expectedEtag: good!.etag, expectedVersion: good!.version, tags: ['旅行', '证件'], favorite: true },
+				{ key: staleKey, expectedEtag: stale!.etag, expectedVersion: stale!.version, tags: ['待整理'], favorite: true },
+			] }),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ success: true,
+			updated: [{ previousKey: goodKey, file: { key: goodKey, tags: ['旅行', '证件'], favorite: true, uploaded: '2026-09-23T00:00:00Z' } }],
+			failed: [{ key: staleKey, code: 'FILE_CHANGED' }],
+		});
+		const updated = await env.IMAGES.get(goodKey);
+		expect(updated!.customMetadata).toMatchObject({ sgaoTags: '["旅行","证件"]', sgaoFavorite: '1' });
+		expect(new Uint8Array(await updated!.arrayBuffer())).toEqual(goodBytes);
+		expect((await env.IMAGES.head(staleKey))?.customMetadata?.sgaoTags).toBeUndefined();
+	});
+
+	it('rejects invalid, duplicate or oversized batch metadata requests before writing', async () => {
+		const key = `${uploadTestPrefix}batch-tags-validation.png`;
+		await env.IMAGES.put(key, new Uint8Array([...pngSignature, 24]), { httpMetadata: { contentType: 'image/png' } });
+		const current = await env.IMAGES.head(key);
+		const entry = { key, expectedEtag: current!.etag, expectedVersion: current!.version, tags: ['安全'], favorite: false };
+		const duplicate = await ownerFetch('https://example.com/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'metadata-batch', files: [entry, entry] }) });
+		expect(duplicate.status).toBe(400);
+		const oversized = await ownerFetch('https://example.com/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'metadata-batch', files: Array.from({ length: 51 }, (_, index) => ({ ...entry, key: `${uploadTestPrefix}${index}.png` })) }) });
+		expect(oversized.status).toBe(400);
+		expect((await env.IMAGES.head(key))?.customMetadata?.sgaoTags).toBeUndefined();
+	});
+
 	it('deletes multiple selected files in one request', async () => {
 		const keys = [`${uploadTestPrefix}batch-1.png`, `${uploadTestPrefix}batch-2.png`, `${uploadTestPrefix}batch-3.png`];
 

@@ -290,6 +290,7 @@ test('directory completion can pause and resume without a keyword or filter', as
 
 const sortBy = (h, mode) => { h.nodes.get('#sortOrder').value = mode; h.nodes.get('#sortOrder').handlers.get('change')(); };
 const moveSubmit = (h) => h.nodes.get('#moveForm').handlers.get('submit')({ preventDefault() {} });
+const batchTagsSubmit = (h) => h.nodes.get('#batchTagsForm').handlers.get('submit')({ preventDefault() {} });
 const chooseMoveDirectory = (h, value) => { h.nodes.get('#moveDirectory').value = value; h.nodes.get('#moveDirectory').handlers.get('change')(); };
 
 test('move controls require owner selection, show root and existing/new directories, and never write before confirmation', async () => {
@@ -410,6 +411,40 @@ test('batch move dialog is not available in trash or without authorization', asy
 	const h = harness(async () => page([file('a.png')])); await h.run('loadFiles({reset:true})');
 	h.nodes.get('#moveDialog').hidden = true; h.run("selectedKeys.add('a.png'); trashMode = true; openMoveDialog()"); assert.equal(h.nodes.get('#moveDialog').hidden, true);
 	h.run('trashMode = false'); h.window.imageAccount.authorized = false; h.run('openMoveDialog()'); assert.equal(h.nodes.get('#moveDialog').hidden, true);
+});
+
+test('batch metadata combines add, remove and favorite changes and retains only failed selections', async () => {
+	const a = { ...file('a.png'), etag: 'a'.repeat(32), version: 'v-a', tags: ['旅行'], favorite: false };
+	const b = { ...file('b.png'), etag: 'b'.repeat(32), version: 'v-b', tags: Array.from({ length: 12 }, (_, index) => `标签${index}`), favorite: false };
+	const c = { ...file('c.png'), etag: 'c'.repeat(32), version: 'v-c', tags: ['待整理'], favorite: false };
+	const nextA = { ...a, etag: 'd'.repeat(32), version: 'v-a-2', tags: ['旅行', '证件'], favorite: true };
+	const h = harness(async (_, options) => options?.method === 'POST'
+		? Response.json({ success: true, updated: [{ previousKey: a.key, file: nextA }], failed: [{ key: c.key, code: 'FILE_CHANGED', message: '图片已变化' }] })
+		: page([a, b, c]));
+	await h.run('loadFiles({reset:true})'); h.run("selectedKeys = new Set(['a.png', 'b.png', 'c.png']); openBatchTagsDialog()");
+	assert.equal(h.nodes.get('#batchTagsDialog').hidden, false); assert.match(h.nodes.get('#batchTagsSummary').textContent, /3 张/);
+	h.nodes.get('#batchAddTagsInput').value = '证件'; h.nodes.get('#batchRemoveTagsInput').value = '待整理'; h.nodes.get('#batchFavoriteAction').value = 'favorite';
+	await batchTagsSubmit(h);
+	const body = JSON.parse(h.requests[1].options.body);
+	assert.equal(body.action, 'metadata-batch'); assert.equal(body.files.length, 2);
+	assert.deepEqual(body.files[0], { key: a.key, expectedEtag: a.etag, expectedVersion: a.version, tags: ['旅行', '证件'], favorite: true });
+	assert.deepEqual(body.files[1].tags, ['证件']);
+	assert.equal(h.run("files.find(file => file.key === 'a.png').favorite"), true);
+	assert.deepEqual(JSON.parse(h.run('JSON.stringify([...selectedKeys])')), ['b.png', 'c.png']);
+	assert.deepEqual(h.nodes.get('#batchTagsResults').children.map(item => item.attrs['data-state']), ['updated', 'failed', 'failed']);
+	assert.match(h.nodes.get('#batchTagsSummary').textContent, /已更新 1 张.*未完成 2 张/);
+	assert.equal(h.nodes.get('#confirmBatchTagsButton').hidden, true);
+	await batchTagsSubmit(h); assert.equal(h.requests.length, 2);
+});
+
+test('batch metadata rejects no-op and overlapping tags before sending a request', async () => {
+	const a = { ...file('a.png'), etag: 'a'.repeat(32), version: 'v-a', tags: [], favorite: false };
+	const h = harness(async () => page([a])); await h.run('loadFiles({reset:true})');
+	h.run("selectedKeys.add('a.png'); openBatchTagsDialog()"); await batchTagsSubmit(h);
+	assert.match(h.nodes.get('#batchTagsError').textContent, /至少/); assert.equal(h.requests.length, 1);
+	h.nodes.get('#batchAddTagsInput').value = '旅行'; h.nodes.get('#batchRemoveTagsInput').value = '旅行'; await batchTagsSubmit(h);
+	assert.match(h.nodes.get('#batchTagsError').textContent, /同时添加和移除/); assert.equal(h.requests.length, 1);
+	h.run('trashMode = true; closeBatchTagsDialog(true); openBatchTagsDialog()'); assert.equal(h.nodes.get('#batchTagsDialog').hidden, true);
 });
 
 test('default latest-upload order reads all pages and places the newest image first across directories', async () => {
