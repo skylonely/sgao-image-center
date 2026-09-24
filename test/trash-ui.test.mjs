@@ -5,21 +5,22 @@ import { createContext, runInContext } from 'node:vm';
 
 const code = readFileSync(new URL('../public/admin/files/files.js', import.meta.url), 'utf8');
 const sample = { id: '11111111-1111-4111-8111-111111111111', key: 'travel/photo.png', filename: 'photo.png', size: 100, deletedAt: '2026-09-17', url: '/api/trash?view=preview&id=x' };
-function harness(fetcher) {
-	const nodes = new Map(), events = new Map(), requests = [];
+function harness(fetcher, search = '') {
+	const nodes = new Map(), events = new Map(), requests = [], replacedUrls = [];
 	function node() { return { hidden: false, value: '', textContent: '', children: [], attrs: {}, listeners: {}, disabled: false,
 		classList: { add() {}, remove() {}, toggle() {} }, addEventListener(type, handler) { this.listeners[type] = handler; }, focus() {},
 		setAttribute(key, value) { this.attrs[key] = value; }, getAttribute(key) { return this.attrs[key]; }, removeAttribute(key) { delete this.attrs[key]; },
 		append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; }, remove() {} }; }
 	const document = { body: node(), addEventListener() {}, createElement: node, createTextNode: (value) => value,
 		querySelector(selector) { if (!nodes.has(selector)) nodes.set(selector, node()); return nodes.get(selector); } };
-	const window = { imageAccount: { authorized: true, request(url, options) { requests.push({ url, options }); return fetcher(url, options); } },
+	const window = { location: { search, pathname: '/admin/files/', hash: '' }, history: { state: null, replaceState(state, title, url) { replacedUrls.push(url); } },
+		imageAccount: { authorized: true, request(url, options) { requests.push({ url, options }); return fetcher(url, options); } },
 		addEventListener(name, handler) { events.set(name, handler); }, clearTimeout() {}, setTimeout() {} };
 	const context = createContext({ document, window, localStorage: { getItem() { return null; }, setItem() {} },
 		URLSearchParams, AbortController, Intl, Date, console });
 	runInContext(code, context);
 	nodes.get('#sortOrder').value = 'directory';
-	return { nodes, events, requests, window, run: (value) => runInContext(value, context) };
+	return { nodes, events, requests, replacedUrls, window, run: (value) => runInContext(value, context) };
 }
 const ok = (files = []) => Response.json({ success: true, files, truncated: false, cursor: null });
 
@@ -29,6 +30,15 @@ test('switches between files and recycle bin and allows recycle-bin selection', 
 	assert.equal(h.nodes.get('#selectVisibleButton').hidden, false); assert.equal(h.nodes.get('#selectionBar').hidden, true);
 	h.run('switchView(false)'); await new Promise(setImmediate);
 	assert.match(h.requests.at(-1).url, /^\/api\/files/); assert.equal(h.nodes.get('#trashNotice').hidden, true);
+});
+test('opens recycle bin from the one-time workbench deep link', async () => {
+	const h = harness(async () => ok(), '?view=trash&source=workbench');
+	assert.equal(h.run('trashMode'), true);
+	assert.equal(h.nodes.get('#trashNotice').hidden, false);
+	assert.equal(h.nodes.get('#trashFilesButton').attrs['aria-pressed'], 'true');
+	assert.deepEqual(h.replacedUrls, ['/admin/files/?source=workbench']);
+	await h.run('loadFiles({reset:true})');
+	assert.match(h.requests[0].url, /^\/api\/trash/);
 });
 test('recycle-bin selection uses record ids, not shared original paths', () => {
 	const second = { ...sample, id: '22222222-2222-4222-8222-222222222222' };

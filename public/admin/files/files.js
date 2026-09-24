@@ -146,7 +146,22 @@ let pendingRestoreVersion = null;
 let toastTimer = null;
 let previewIndex = -1;
 let lastPreviewTrigger = null;
-let trashMode = false;
+function requestedInitialView() {
+	try { return new URLSearchParams(window.location.search).get('view'); }
+	catch { return null; }
+}
+
+function consumeInitialView() {
+	try {
+		const query = new URLSearchParams(window.location.search);
+		if (!query.has('view')) return;
+		query.delete('view');
+		const nextQuery = query.toString();
+		window.history?.replaceState(window.history.state, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`);
+	} catch { /* Keep the selected view even if the address cannot be cleaned up. */ }
+}
+
+let trashMode = requestedInitialView() === 'trash';
 let loadGeneration = 0;
 let pendingPurgeFile = null;
 let pendingTrashBatchFiles = [];
@@ -174,6 +189,10 @@ let overviewBusy = false;
 const MAX_OVERVIEW_FILES = 10000;
 const fileNameCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 sortOrder.value = 'time-desc';
+activeFilesButton.setAttribute('aria-pressed', String(!trashMode));
+trashFilesButton.setAttribute('aria-pressed', String(trashMode));
+trashNotice.hidden = !trashMode;
+consumeInitialView();
 
 activeFilesButton.addEventListener('click', () => switchView(false));
 trashFilesButton.addEventListener('click', () => switchView(true));
