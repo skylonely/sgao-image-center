@@ -5,13 +5,15 @@ import { createContext, runInContext } from 'node:vm';
 
 const code = readFileSync(new URL('../public/admin/app.js', import.meta.url), 'utf8');
 
-function harness(request = async () => Response.json({ success: true, url: 'https://img.sgao.cc/image/test.png' })) {
-	const nodes = new Map(), documentEvents = new Map(), windowEvents = new Map(), requests = [], revoked = [];
+function harness(request = async () => Response.json({ success: true, url: 'https://img.sgao.cc/image/test.png' }), hash = '') {
+	const nodes = new Map(), documentEvents = new Map(), windowEvents = new Map(), requests = [], revoked = [], replacedUrls = [];
 	let previewNumber = 0;
 	function node() {
 		return {
 			hidden: false, value: '', textContent: '', children: [], handlers: new Map(), disabled: false,
-			classList: { add() {}, remove() {} }, focus() {}, click() {},
+			classList: { add() {}, remove() {} },
+			focus() { this.focused = true; }, click() {},
+			scrollIntoView(options) { this.scrolledWith = options; },
 			addEventListener(type, handler) { this.handlers.set(type, handler); },
 			setAttribute() {}, append(...items) { this.children.push(...items); },
 			replaceChildren(...items) { this.children = items; },
@@ -25,6 +27,9 @@ function harness(request = async () => Response.json({ success: true, url: 'http
 	};
 	const window = {
 		imageAccount: { authorized: true, request(url, options) { requests.push({ url, options }); return request(url, options); } },
+		location: { hash, pathname: '/admin/', search: '' },
+		history: { state: null, replaceState(state, title, url) { replacedUrls.push(url); } },
+		requestAnimationFrame(callback) { callback(); },
 		addEventListener(type, handler) { windowEvents.set(type, handler); },
 	};
 	const URL = { createObjectURL() { return `blob:preview-${++previewNumber}`; }, revokeObjectURL(url) { revoked.push(url); } };
@@ -34,7 +39,7 @@ function harness(request = async () => Response.json({ success: true, url: 'http
 	document.querySelector('#retryFailedButton').hidden = true;
 	runInContext(code, context);
 	return {
-		nodes, document, window, windowEvents, requests, revoked, run: (expression) => runInContext(expression, context),
+		nodes, document, window, windowEvents, requests, revoked, replacedUrls, run: (expression) => runInContext(expression, context),
 		paste(files, target = null) {
 			let prevented = false;
 			documentEvents.get('paste')({ target, clipboardData: { items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })) }, preventDefault() { prevented = true; } });
@@ -42,6 +47,16 @@ function harness(request = async () => Response.json({ success: true, url: 'http
 		},
 	};
 }
+
+test('backup hash reveals and focuses the restore panel once, then cleans the URL', () => {
+	const h = harness(undefined, '#backup');
+	assert.equal(h.nodes.get('#backup').scrolledWith.block, 'start');
+	assert.equal(h.nodes.get('#backup').scrolledWith.behavior, 'smooth');
+	assert.equal(h.nodes.get('#backup').focused, true);
+	assert.deepEqual(h.replacedUrls, ['/admin/']);
+	h.windowEvents.get('image-auth-changed')({ detail: { authorized: true } });
+	assert.deepEqual(h.replacedUrls, ['/admin/']);
+});
 
 test('consecutive screenshot pastes append uniquely named, previewable files and allow rename', () => {
 	const h = harness();

@@ -15,6 +15,7 @@ const cancelConflictButton = document.querySelector('#cancelConflictButton');
 const overwriteButton = document.querySelector('#overwriteButton');
 const renameButton = document.querySelector('#renameButton');
 const backupInput = document.querySelector('#backupInput');
+const backupPanel = document.querySelector('#backup');
 const backupStatus = document.querySelector('#backupStatus');
 const backupList = document.querySelector('#backupList');
 const restoreButton = document.querySelector('#restoreButton');
@@ -30,6 +31,7 @@ let directorySuggestions = new Set();
 let backupFiles = [];
 let selectedBackupKeys = new Set();
 let restoreBusy = false;
+let backupLinkPending = window.location.hash === '#backup';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ALLOWED_FILE_TYPES = new Map([
@@ -39,6 +41,16 @@ const ALLOWED_FILE_TYPES = new Map([
 	['image/gif', new Set(['gif'])],
 	['image/svg+xml', new Set(['svg'])],
 ]);
+
+function revealBackupFromLink() {
+	if (!backupLinkPending || !window.imageAccount.authorized) return;
+	backupLinkPending = false;
+	window.requestAnimationFrame(() => {
+		backupPanel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+		backupPanel.focus({ preventScroll: true });
+		window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
+	});
+}
 
 function resetBackup() {
 	backupFiles = []; selectedBackupKeys.clear(); restoreBusy = false;
@@ -675,10 +687,15 @@ uploadButton.addEventListener('click', () => uploadQueuedFiles('pending'));
 retryFailedButton.addEventListener('click', () => uploadQueuedFiles('error'));
 
 window.addEventListener('image-auth-changed', (event) => {
-	if (event.detail.authorized) loadDirectorySuggestions();
+	if (event.detail.authorized) {
+		loadDirectorySuggestions();
+		revealBackupFromLink();
+	}
 	else {
 		directoryRequestId += 1; directorySuggestions.clear(); renderDirectorySuggestions(); resolveConflict('cancel');
 		clearSelectedFiles(); statusBox.replaceChildren();
 		resetBackup();
 	}
 });
+
+revealBackupFromLink();

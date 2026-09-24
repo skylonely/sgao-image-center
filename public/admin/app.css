@@ -571,6 +571,7 @@ select:focus {
 	.overview-large { grid-column: auto; }
 }
 
+.backup-panel { scroll-margin-top: 24px; outline: none; }
 .backup-panel h2 { margin: 0 0 8px; font-size: 20px; }
 .backup-picker { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 14px; margin-top: 14px; color: #175cd3; background: #eff8ff; border: 1px solid #b2ddff; border-radius: 8px; font-weight: 650; cursor: pointer; }
 .backup-picker input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

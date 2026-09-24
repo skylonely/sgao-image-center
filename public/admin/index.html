@@ -51,7 +51,7 @@
 				<div id="status" class="status"></div>
 			</section>
 
-			<section class="panel backup-panel" data-owner-only hidden>
+			<section id="backup" class="panel backup-panel" data-owner-only tabindex="-1" hidden>
 				<h2>从备份恢复</h2>
 				<p class="help-text">选择由 Image Center 导出的 ZIP 备份，先预览后再恢复。默认跳过同名图片，绝不会覆盖现有文件。</p>
 				<label class="backup-picker" for="backupInput">选择 ZIP 备份<input id="backupInput" type="file" accept=".zip,application/zip" /></label>
