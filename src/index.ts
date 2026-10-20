@@ -1,3 +1,4 @@
+import { imageLoginDestination } from './notes-return';
 import { handleFiles } from './routes/files';
 import { handleImage } from './routes/image';
 import { handleUpload } from './routes/upload';
@@ -16,7 +17,7 @@ export default {
 			if (identity instanceof Response) return identity;
 			if (url.pathname === '/api/login') {
 				const returnTo = url.searchParams.get('returnTo');
-				const destination = returnTo === '/admin/files/' ? returnTo : '/admin/';
+				const destination = imageLoginDestination(returnTo);
 				return new Response(null, { status: 302, headers: { Location: destination, 'Cache-Control': 'private, no-store' } });
 			}
 			return Response.json({ success: true, account: identity }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie, Cf-Access-Jwt-Assertion' } });

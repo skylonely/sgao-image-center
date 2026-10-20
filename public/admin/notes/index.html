@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer"><title>插入图片 · SGAO 随手记</title>
+  <link rel="stylesheet" href="/admin/notes/notes.css">
+</head>
+<body><main>
+  <a class="brand" href="https://notes.sgao.cc/">SGAO <span>随手记 / 图片附件</span></a>
+  <h1>给这页笔记，加一张图。</h1>
+  <p class="intro">图片使用现有图片库保存，上传后以公开链接插入笔记。请确认图片适合通过链接访问。</p>
+  <section class="account"><p id="accountStatus">正在检查账号…</p><a id="loginLink" href="/api/login" hidden>登录 SGAO 账号 ↗</a><a id="logoutLink" href="/cdn-cgi/access/logout" hidden>退出图片账号</a><button id="checkAccountButton">重新检查</button></section>
+  <p id="connectionStatus" role="status">正在连接笔记窗口…</p>
+  <section data-owner-only hidden>
+    <label class="choose">选择图片<input id="imageFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label>
+    <p class="hint">每次一张，支持 PNG、JPEG、WebP、GIF，最大 10 MB；也可在此粘贴截图。</p>
+    <img id="preview" alt="待上传图片预览" hidden><p id="filename"></p>
+    <button class="primary" id="uploadButton" disabled>上传并插入笔记</button>
+  </section>
+  <p id="result" role="status"></p><a id="uploadedLink" target="_blank" rel="noopener noreferrer" hidden>打开已上传图片</a>
+  <p class="hint">上传完成后返回原笔记。删除笔记不会删除图片库中的原图；JSON 备份保存图片链接，不包含图片文件。</p>
+</main><script src="/admin/auth.js"></script><script src="/admin/notes/notes.js"></script></body>
+</html>
